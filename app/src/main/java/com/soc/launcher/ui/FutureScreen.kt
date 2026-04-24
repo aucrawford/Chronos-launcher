@@ -1,0 +1,433 @@
+package com.soc.launcher.ui
+
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.provider.ContactsContract
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.graphics.drawable.toBitmap
+import coil.compose.AsyncImage
+import com.soc.launcher.getFavoriteContacts
+import com.soc.launcher.searchContacts
+import com.soc.launcher.data.model.AppInfo
+import com.soc.launcher.data.model.ContactInfo
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+@Composable
+fun FutureScreen(apps: List<AppInfo>) {
+    val context = LocalContext.current
+    var searchQuery by remember { mutableStateOf("") }
+    
+    val filteredApps = remember(apps, searchQuery) {
+        if (searchQuery.isBlank()) {
+            apps
+        } else {
+            apps.filter { it.name.contains(searchQuery, ignoreCase = true) }
+        }
+    }
+
+    val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ#".toList()
+    val sectionIndices = remember(filteredApps, searchQuery) {
+        if (searchQuery.isNotBlank()) emptyMap()
+        else alphabet.map { char ->
+            val index = filteredApps.indexOfFirst {
+                if (char == '#') !it.name.first().isLetter()
+                else it.name.startsWith(char, ignoreCase = true)
+            }
+            char to index
+        }.filter { it.second != -1 }.toMap()
+    }
+
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+
+    val contactsPermission = Manifest.permission.READ_CONTACTS
+    var hasContactsPermission by remember { mutableStateOf(context.checkSelfPermission(contactsPermission) == PackageManager.PERMISSION_GRANTED) }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        hasContactsPermission = isGranted
+    }
+
+    val favoriteContacts by produceState<List<ContactInfo>>(initialValue = emptyList(), hasContactsPermission) {
+        if (hasContactsPermission) {
+            value = withContext(Dispatchers.IO) { getFavoriteContacts(context) }
+        }
+    }
+
+    var searchedContacts by remember { mutableStateOf<List<ContactInfo>>(emptyList()) }
+    LaunchedEffect(searchQuery, hasContactsPermission) {
+        if (searchQuery.isNotBlank() && hasContactsPermission) {
+            delay(300)
+            searchedContacts = withContext(Dispatchers.IO) { searchContacts(context, searchQuery) }
+        } else {
+            searchedContacts = emptyList()
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF050A10).copy(alpha = 0.85f))
+    ) {
+        Row(modifier = Modifier.fillMaxSize()) {
+            FavoritesSidebar(favoriteContacts, hasContactsPermission) { permissionLauncher.launch(contactsPermission) }
+
+            Box(modifier = Modifier.fillMaxHeight().width(1.dp).background(Color.White.copy(alpha = 0.05f)))
+
+            Column(modifier = Modifier.weight(1f)) {
+                SearchBarUI(
+                    query = searchQuery,
+                    onQueryChange = { searchQuery = it },
+                    onClear = { searchQuery = "" }
+                )
+
+                if (apps.isEmpty()) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = Color.White.copy(alpha = 0.2f))
+                    }
+                } else {
+                    Box(
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize().padding(start = 16.dp, end = if (searchQuery.isBlank()) 44.dp else 16.dp),
+                            contentPadding = PaddingValues(bottom = 64.dp)
+                        ) {
+                            if (searchQuery.isNotBlank()) {
+                                if (searchedContacts.isNotEmpty()) {
+                                    item(key = "contacts_header") {
+                                        Text(
+                                            "CONTACTS",
+                                            color = Color(0xFF4A90E2),
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Black,
+                                            letterSpacing = 1.sp,
+                                            modifier = Modifier.padding(top = 24.dp, bottom = 8.dp)
+                                        )
+                                    }
+                                    items(
+                                        items = searchedContacts,
+                                        key = { "contact_${it.id}" },
+                                        contentType = { "contact" }
+                                    ) { contact ->
+                                        ContactRow(contact)
+                                    }
+                                }
+
+                                if (filteredApps.isNotEmpty()) {
+                                    item(key = "apps_header") {
+                                        if (searchedContacts.isNotEmpty()) {
+                                            Spacer(Modifier.height(24.dp))
+                                            Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
+                                        }
+                                        Text(
+                                            "APPS",
+                                            color = Color(0xFF4A90E2),
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Black,
+                                            letterSpacing = 1.sp,
+                                            modifier = Modifier.padding(top = 24.dp, bottom = 8.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            items(
+                                count = filteredApps.size,
+                                key = { index -> "app_${filteredApps[index].packageName}" },
+                                contentType = { "app" }
+                            ) { index ->
+                                val app = filteredApps[index]
+                                val firstChar = app.name.first().uppercaseChar()
+                                val isFirstInCategory = (index == 0 || filteredApps[index - 1].name.first().uppercaseChar() != firstChar) && searchQuery.isBlank()
+
+                                if (isFirstInCategory) {
+                                    Text(
+                                        text = if (firstChar.isLetter()) firstChar.toString() else "#",
+                                        color = Color(0xFF4A90E2),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Black,
+                                        modifier = Modifier.padding(top = 24.dp, bottom = 8.dp)
+                                    )
+                                }
+
+                                AppRow(app)
+                            }
+                        }
+
+                        if (searchQuery.isBlank()) {
+                            AlphabetScroller(alphabet, sectionIndices) { char ->
+                                sectionIndices[char]?.let { index ->
+                                    scope.launch { listState.scrollToItem(index) }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SearchBarUI(query: String, onQueryChange: (String) -> Unit, onClear: () -> Unit) {
+    OutlinedTextField(
+        value = query,
+        onValueChange = onQueryChange,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        placeholder = { Text("Search apps & contacts", color = Color.White.copy(alpha = 0.3f), fontSize = 14.sp) },
+        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Color.White.copy(alpha = 0.3f), modifier = Modifier.size(20.dp)) },
+        trailingIcon = {
+            if (query.isNotEmpty()) {
+                IconButton(onClick = onClear) {
+                    Icon(Icons.Default.Clear, contentDescription = "Clear", tint = Color.White.copy(alpha = 0.3f), modifier = Modifier.size(20.dp))
+                }
+            }
+        },
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = Color(0xFF4A90E2).copy(alpha = 0.4f),
+            unfocusedBorderColor = Color.White.copy(alpha = 0.1f),
+            focusedTextColor = Color.White,
+            unfocusedTextColor = Color.White,
+            cursorColor = Color(0xFF4A90E2),
+            focusedContainerColor = Color.White.copy(alpha = 0.03f),
+            unfocusedContainerColor = Color.White.copy(alpha = 0.03f)
+        ),
+        shape = RoundedCornerShape(16.dp),
+        singleLine = true,
+        textStyle = TextStyle(fontSize = 15.sp)
+    )
+}
+
+@Composable
+fun FavoritesSidebar(favoriteContacts: List<ContactInfo>, hasPermission: Boolean, onPermissionRequest: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxHeight()
+            .width(72.dp)
+            .background(Color.White.copy(alpha = 0.03f))
+            .padding(vertical = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            "FAV",
+            color = Color(0xFF4A90E2),
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Black,
+            letterSpacing = 1.sp
+        )
+        Spacer(Modifier.height(24.dp))
+
+        if (!hasPermission) {
+            IconButton(
+                onClick = onPermissionRequest,
+                modifier = Modifier.background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+            ) {
+                Icon(Icons.Default.Settings, contentDescription = "Contacts Permission", tint = Color.White.copy(alpha = 0.6f))
+            }
+        } else if (favoriteContacts.isEmpty()) {
+            Icon(
+                Icons.Default.AutoAwesome,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.1f),
+                modifier = Modifier.size(24.dp)
+            )
+        } else {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                favoriteContacts.forEach { contact ->
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        ContactAvatar(contact)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = contact.name.split(" ").firstOrNull() ?: "",
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.width(64.dp),
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ContactAvatar(contact: ContactInfo, onClick: (() -> Unit)? = null) {
+    val context = LocalContext.current
+    Box(
+        modifier = Modifier
+            .size(44.dp)
+            .clickable(enabled = onClick != null || contact.id.isNotEmpty()) {
+                if (onClick != null) {
+                    onClick()
+                } else {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.withAppendedPath(ContactsContract.Contacts.CONTENT_URI, contact.id))
+                    try { context.startActivity(intent) } catch (e: Exception) {}
+                }
+            }
+    ) {
+        if (contact.photoUri != null) {
+            AsyncImage(
+                model = contact.photoUri,
+                contentDescription = contact.name,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(14.dp)),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(14.dp))
+                    .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(14.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = contact.name.take(1).uppercase(),
+                    color = Color.White.copy(alpha = 0.6f),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ContactRow(contact: ContactInfo) {
+    val context = LocalContext.current
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.withAppendedPath(ContactsContract.Contacts.CONTENT_URI, contact.id))
+                try { context.startActivity(intent) } catch (e: Exception) {}
+            }
+            .padding(vertical = 10.dp)
+    ) {
+        ContactAvatar(contact, onClick = { /* Already handled by Row */ })
+        Spacer(Modifier.width(16.dp))
+        Text(contact.name, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+fun AppRow(app: AppInfo) {
+    val context = LocalContext.current
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable {
+                val intent = context.packageManager.getLaunchIntentForPackage(app.packageName)
+                if (intent != null) {
+                    try { context.startActivity(intent) } catch (e: Exception) {}
+                }
+            }
+            .padding(vertical = 10.dp)
+    ) {
+        val icon = remember(app.packageName) {
+            try { context.packageManager.getApplicationIcon(app.packageName) } catch (e: Exception) { null }
+        }
+        if (icon != null) {
+            Image(bitmap = icon.toBitmap().asImageBitmap(), contentDescription = null, modifier = Modifier.size(36.dp))
+            Spacer(Modifier.width(16.dp))
+        }
+        Text(app.name, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+fun BoxScope.AlphabetScroller(alphabet: List<Char>, sectionIndices: Map<Char, Int>, onScrollTo: (Char) -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxHeight()
+            .width(36.dp)
+            .align(Alignment.CenterEnd)
+            .background(
+                Brush.horizontalGradient(
+                    colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.2f))
+                )
+            )
+            .padding(vertical = 48.dp)
+            .pointerInput(alphabet, sectionIndices) {
+                detectVerticalDragGestures { change, _ ->
+                    val charHeight = size.height.toFloat() / alphabet.size
+                    val index = (change.position.y / charHeight).toInt().coerceIn(0, alphabet.size - 1)
+                    val char = alphabet[index]
+                    if (sectionIndices.containsKey(char)) {
+                        onScrollTo(char)
+                    }
+                }
+            },
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.SpaceEvenly
+    ) {
+        alphabet.forEach { char ->
+            val hasApps = sectionIndices.containsKey(char)
+            Text(
+                text = char.toString(),
+                color = if (hasApps) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.2f),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Black,
+                modifier = Modifier
+                    .clickable(enabled = hasApps) { onScrollTo(char) }
+                    .padding(vertical = 1.dp)
+            )
+        }
+    }
+}
