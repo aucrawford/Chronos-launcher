@@ -7,6 +7,7 @@ import android.provider.Settings
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -14,6 +15,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -39,7 +43,9 @@ fun SettingsDialog(
     weatherApiKey: String,
     onApiKeyChanged: (String) -> Unit,
     newsApiKey: String,
-    onNewsApiKeyChanged: (String) -> Unit
+    onNewsApiKeyChanged: (String) -> Unit,
+    use24HourFormat: Boolean,
+    onUse24HourFormatChanged: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
     val apps by produceState<List<AppInfo>>(initialValue = emptyList()) {
@@ -56,6 +62,8 @@ fun SettingsDialog(
         }
     }
 
+    var permissionsExpanded by remember { mutableStateOf(false) }
+
     Dialog(onDismissRequest = onDismiss) {
         Card(
             modifier = Modifier
@@ -65,7 +73,22 @@ fun SettingsDialog(
             colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A))
         ) {
             Column(Modifier.padding(24.dp).verticalScroll(rememberScrollState())) {
-                Text("Settings", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Settings", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Text(
+                        text = "CLOSE",
+                        color = Color.Gray,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .clickable { onDismiss() }
+                            .padding(8.dp)
+                    )
+                }
                 Spacer(Modifier.height(24.dp))
 
                 Button(onClick = { bgPickerLauncher.launch(arrayOf("image/*")) }) {
@@ -76,6 +99,29 @@ fun SettingsDialog(
                 AppPicker("Search App", apps.filter { it.packageName.contains("search", true) || it.packageName.contains("browser", true) }) { onAppSelected("search", it) }
                 AppPicker("AI App", apps.filter { it.packageName.contains("ai", true) || it.packageName.contains("chat", true) || it.packageName.contains("bard", true) }) { onAppSelected("ai", it) }
                 AppPicker("News App", apps.filter { it.packageName.contains("news", true) || it.packageName.contains("magazines", true) }) { onAppSelected("news", it) }
+
+                Spacer(Modifier.height(24.dp))
+                Text("Time Display", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onUse24HourFormatChanged(!use24HourFormat) }
+                        .padding(vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Use 24-hour format", color = Color.White, fontSize = 14.sp)
+                    Switch(
+                        checked = use24HourFormat,
+                        onCheckedChange = onUse24HourFormatChanged,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = Color.Gray,
+                            uncheckedThumbColor = Color.Gray,
+                            uncheckedTrackColor = Color.Black
+                        )
+                    )
+                }
 
                 Spacer(Modifier.height(24.dp))
                 Text("Weather", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
@@ -121,30 +167,55 @@ fun SettingsDialog(
                 )
 
                 Spacer(Modifier.height(24.dp))
-                Text("Permissions", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                Spacer(Modifier.height(8.dp))
-
-                PermissionLink("App Permissions") {
-                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                        data = Uri.fromParts("package", context.packageName, null)
-                    }
-                    context.startActivity(intent)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { permissionsExpanded = !permissionsExpanded }
+                        .padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Permissions", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Icon(
+                        imageVector = if (permissionsExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = null,
+                        tint = Color.Gray
+                    )
                 }
 
-                Spacer(Modifier.height(12.dp))
-                PermissionLink("Set Default Launcher") {
-                    val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        Intent(Settings.ACTION_HOME_SETTINGS)
-                    } else {
-                        Intent(Settings.ACTION_SETTINGS)
+                AnimatedVisibility(visible = permissionsExpanded) {
+                    Column {
+                        PermissionLink("App Permissions") {
+                            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                data = Uri.fromParts("package", context.packageName, null)
+                            }
+                            context.startActivity(intent)
+                        }
+
+                        PermissionLink("Set Default Launcher") {
+                            val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                Intent(Settings.ACTION_HOME_SETTINGS)
+                            } else {
+                                Intent(Settings.ACTION_SETTINGS)
+                            }
+                            context.startActivity(intent)
+                        }
+                        PermissionLink("Usage Access") {
+                            context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+                        }
+                        PermissionLink("Notification Access") {
+                            context.startActivity(Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"))
+                        }
                     }
-                    context.startActivity(intent)
                 }
-                PermissionLink("Usage Access") {
-                    context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
-                }
-                PermissionLink("Notification Access") {
-                    context.startActivity(Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"))
+
+                Spacer(Modifier.height(32.dp))
+                Button(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)
+                ) {
+                    Text("DONE", fontWeight = FontWeight.Bold)
                 }
             }
         }

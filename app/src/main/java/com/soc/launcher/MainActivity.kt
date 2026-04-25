@@ -160,11 +160,11 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(Unit) {
                 val permissions = mutableListOf(
                     Manifest.permission.READ_CALL_LOG,
-                    "android.permission.WRITE_CALL_LOG",
                     Manifest.permission.READ_SMS,
-                    "android.permission.WRITE_SMS",
                     Manifest.permission.READ_CONTACTS,
-                    Manifest.permission.ACCESS_COARSE_LOCATION
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.READ_CALENDAR
                 )
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     permissions.add(Manifest.permission.READ_MEDIA_IMAGES)
@@ -192,7 +192,6 @@ fun TemporalLauncher() {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val sharedPrefs = remember { context.getSharedPreferences("launcher_prefs", Context.MODE_PRIVATE) }
-    val gson = remember { Gson() }
 
     val wallpaperManager = remember { WallpaperManager.getInstance(context) }
 
@@ -246,22 +245,7 @@ fun TemporalLauncher() {
     var newsAppPackage by remember { mutableStateOf(sharedPrefs.getString("news_pkg", "com.google.android.apps.magazines") ?: "com.google.android.apps.magazines") }
     var weatherApiKey by remember { mutableStateOf(sharedPrefs.getString("weather_api_key", "") ?: "") }
     var newsApiKey by remember { mutableStateOf(sharedPrefs.getString("news_api_key", "") ?: "") }
-
-    var reminders by remember {
-        val json = sharedPrefs.getString("reminders", null)
-        mutableStateOf<List<Reminder>>(
-            try {
-                if (json != null) {
-                    val type = object : TypeToken<List<Reminder>>() {}.type
-                    gson.fromJson<List<Reminder>>(json, type)
-                } else emptyList()
-            } catch (e: Exception) {
-                emptyList()
-            }
-        )
-    }
-
-    val hasImportantNote = reminders.any { it.isImportant }
+    var use24HourFormat by remember { mutableStateOf(sharedPrefs.getBoolean("use_24h", false)) }
 
     val pagerState = rememberPagerState(initialPage = 1, pageCount = { 3 })
     var showSettings by remember { mutableStateOf(false) }
@@ -313,13 +297,15 @@ fun TemporalLauncher() {
                     0 -> PastScreen(
                         newsAppPackage = newsAppPackage,
                         newsApiKey = newsApiKey,
-                        reminders = reminders,
-                        onRemindersChanged = { updatedReminders ->
-                            reminders = updatedReminders
-                            sharedPrefs.edit().putString("reminders", gson.toJson(updatedReminders)).apply()
-                        }
+                        apps = apps
                     )
-                    1 -> PresentScreen(searchAppPackage, aiAppPackage, apps, weatherApiKey, hasImportantNote)
+                    1 -> PresentScreen(
+                        searchAppPackage = searchAppPackage,
+                        aiAppPackage = aiAppPackage,
+                        apps = apps,
+                        weatherApiKey = weatherApiKey,
+                        use24HourFormat = use24HourFormat
+                    )
                     2 -> FutureScreen(apps)
                 }
             }
@@ -348,6 +334,11 @@ fun TemporalLauncher() {
                 onApiKeyChanged = { key ->
                     weatherApiKey = key
                     sharedPrefs.edit().putString("weather_api_key", key).apply()
+                },
+                use24HourFormat = use24HourFormat,
+                onUse24HourFormatChanged = { use24h ->
+                    use24HourFormat = use24h
+                    sharedPrefs.edit().putBoolean("use_24h", use24h).apply()
                 }
             )
         }
@@ -668,4 +659,40 @@ fun searchContacts(context: Context, query: String): List<ContactInfo> {
 
 fun isNotificationServiceEnabled(context: Context): Boolean {
     return NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+}
+
+fun getDailyAppUsage(context: Context, allApps: List<AppInfo>): List<AppUsageInfo> {
+    if (!hasUsageStatsPermission(context)) {
+        return emptyList()
+    }
+    val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+    val calendar = Calendar.getInstance()
+    calendar.set(Calendar.HOUR_OF_DAY, 0)
+    calendar.set(Calendar.MINUTE, 0)
+    calendar.set(Calendar.SECOND, 0)
+    calendar.set(Calendar.MILLISECOND, 0)
+    val startTime = calendar.timeInMillis
+    val endTime = System.currentTimeMillis()
+
+    val stats = usageStatsManager.queryAndAggregateUsageStats(startTime, endTime)
+
+    // Get list of launchers to exclude
+    val packageManager = context.packageManager
+    val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+    val launcherPackages = packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
+        .map { it.activityInfo.packageName }
+        .toSet()
+
+    return stats.values
+        .filter { it.totalTimeInForeground > 0 && it.packageName !in launcherPackages }
+        .mapNotNull { usageStats ->
+            allApps.find { it.packageName == usageStats.packageName }?.let { appInfo ->
+                AppUsageInfo(
+                    packageName = usageStats.packageName,
+                    name = appInfo.name,
+                    totalTimeInForeground = usageStats.totalTimeInForeground
+                )
+            }
+        }
+        .sortedByDescending { it.totalTimeInForeground }
 }

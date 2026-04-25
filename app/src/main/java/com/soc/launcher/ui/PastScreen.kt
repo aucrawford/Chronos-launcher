@@ -34,10 +34,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import coil.compose.AsyncImage
 import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
 import com.soc.launcher.*
-import com.soc.launcher.data.model.Reminder
-import com.soc.launcher.data.model.MissedCallInfo
-import com.soc.launcher.data.model.NewsArticle
+import android.provider.Settings
+import com.soc.launcher.data.model.*
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import androidx.compose.foundation.rememberScrollState
@@ -65,8 +66,7 @@ import java.util.*
 fun PastScreen(
     newsAppPackage: String,
     newsApiKey: String,
-    reminders: List<Reminder>,
-    onRemindersChanged: (List<Reminder>) -> Unit
+    apps: List<AppInfo>
 ) {
     val context = LocalContext.current
 
@@ -187,6 +187,15 @@ fun PastScreen(
         }
     }
 
+    var appUsage by remember { mutableStateOf<List<AppUsageInfo>>(emptyList()) }
+    var hasUsagePermission by remember { mutableStateOf(hasUsageStatsPermission(context)) }
+
+    LaunchedEffect(hasUsagePermission, apps) {
+        if (hasUsagePermission) {
+            appUsage = getDailyAppUsage(context, apps).take(5)
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -266,22 +275,24 @@ fun PastScreen(
                         context.startActivity(intent)
                     } else {
                         // Mark current location
-                        if (context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                        if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
                             val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
                             try {
-                                fusedLocationClient.lastLocation.addOnSuccessListener { location ->
-                                    if (location != null) {
-                                        val now = System.currentTimeMillis()
-                                        parkingLat = location.latitude.toFloat()
-                                        parkingLng = location.longitude.toFloat()
-                                        parkingTime = now
-                                        sharedPrefs.edit()
-                                            .putFloat("parking_lat", parkingLat)
-                                            .putFloat("parking_lng", parkingLng)
-                                            .putLong("parking_time", parkingTime)
-                                            .apply()
+                                val cts = CancellationTokenSource()
+                                fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, cts.token)
+                                    .addOnSuccessListener { location ->
+                                        if (location != null) {
+                                            val now = System.currentTimeMillis()
+                                            parkingLat = location.latitude.toFloat()
+                                            parkingLng = location.longitude.toFloat()
+                                            parkingTime = now
+                                            sharedPrefs.edit()
+                                                .putFloat("parking_lat", parkingLat)
+                                                .putFloat("parking_lng", parkingLng)
+                                                .putLong("parking_time", parkingTime)
+                                                .apply()
+                                        }
                                     }
-                                }
                             } catch (e: SecurityException) {
                                 Log.e("ChronosLauncher", "Location permission denied", e)
                             }
@@ -329,17 +340,14 @@ fun PastScreen(
             }
             Spacer(Modifier.height(24.dp))
 
-            ReminderSection(
+            AppUsageSection(
                 modifier = Modifier.weight(1f),
-                reminders = reminders,
-                onAddReminder = { text, isImportant, isPink ->
-                    onRemindersChanged(reminders + Reminder(UUID.randomUUID().toString(), text, System.currentTimeMillis(), isImportant, isPink))
-                },
-                onRemoveReminder = { id ->
-                    onRemindersChanged(reminders.filter { it.id != id })
-                },
-                onUpdateReminder = { id, newText, isImportant, isPink ->
-                    onRemindersChanged(reminders.map { if (it.id == id) it.copy(text = newText, isImportant = isImportant, isPink = isPink) else it })
+                appUsage = appUsage,
+                hasPermission = hasUsagePermission,
+                onRequestPermission = {
+                    val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
+                    intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    context.startActivity(intent)
                 }
             )
         }
@@ -474,26 +482,86 @@ fun NewsCard(article: NewsArticle) {
 }
 
 @Composable
-fun ReminderSection(
-    modifier: Modifier = Modifier,
-    reminders: List<Reminder>,
-    onAddReminder: (String, Boolean, Boolean) -> Unit,
-    onRemoveReminder: (String) -> Unit,
-    onUpdateReminder: (String, String, Boolean, Boolean) -> Unit
+fun Section(
+    title: String,
+    items: List<String>,
+    onItemClick: (Int) -> Unit,
+    onPermissionClick: (() -> Unit)? = null,
+    onClearClick: (() -> Unit)? = null,
+    maxItems: Int = 3
 ) {
-    var isAdding by remember { mutableStateOf(false) }
-    var text by remember { mutableStateOf("") }
-    var isImportantNew by remember { mutableStateOf(false) }
-    var isPinkNew by remember { mutableStateOf(false) }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                title.uppercase(),
+                color = Color(0xFF4A90E2),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Black,
+                letterSpacing = 1.sp
+            )
+            if (onClearClick != null && items.isNotEmpty()) {
+                IconButton(onClick = onClearClick, modifier = Modifier.size(20.dp)) {
+                    Icon(Icons.Default.Close, contentDescription = "Clear", tint = Color(0xFF4A90E2).copy(alpha = 0.6f), modifier = Modifier.size(14.dp))
+                }
+            }
+        }
 
-    var editingId by remember { mutableStateOf<String?>(null) }
-    var editText by remember { mutableStateOf("") }
-    var editIsImportant by remember { mutableStateOf(false) }
-    var editIsPink by remember { mutableStateOf(false) }
+        Spacer(Modifier.height(12.dp))
 
+        if (onPermissionClick != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onPermissionClick() }
+                    .padding(vertical = 8.dp),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                Text(
+                    "Enable permissions to see $title".uppercase(),
+                    color = Color.White.copy(alpha = 0.4f),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        } else if (items.isEmpty()) {
+            Text(
+                "No new $title".uppercase(),
+                color = Color.White.copy(alpha = 0.2f),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(vertical = 8.dp)
+            )
+        } else {
+            items.take(maxItems).forEachIndexed { index, item ->
+                Text(
+                    text = item,
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onItemClick(index) }
+                        .padding(vertical = 8.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun AppUsageSection(
+    modifier: Modifier = Modifier,
+    appUsage: List<AppUsageInfo>,
+    hasPermission: Boolean,
+    onRequestPermission: () -> Unit
+) {
+    val context = LocalContext.current
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
-            "Notes from my past self".uppercase(),
+            "Phone Usage Today".uppercase(),
             color = Color(0xFF4A90E2),
             fontSize = 11.sp,
             fontWeight = FontWeight.Black,
@@ -502,207 +570,100 @@ fun ReminderSection(
 
         Spacer(Modifier.height(12.dp))
 
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .verticalScroll(rememberScrollState())
-        ) {
-            reminders.forEach { reminder ->
-                if (editingId == reminder.id) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(onClick = {
-                            editIsImportant = !editIsImportant
-                        }, modifier = Modifier.size(32.dp)) {
-                            Icon(
-                                Icons.Default.PriorityHigh,
-                                contentDescription = "Toggle Important",
-                                tint = if (editIsImportant) Color.Yellow else Color.White.copy(alpha = 0.2f),
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-
-                        IconButton(onClick = {
-                            editIsPink = !editIsPink
-                        }, modifier = Modifier.size(32.dp)) {
-                            Icon(
-                                Icons.Default.Favorite,
-                                contentDescription = "Toggle Pink",
-                                tint = if (editIsPink) Color(0xFFFF69B4) else Color.White.copy(alpha = 0.2f),
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-
-                        TextField(
-                            value = editText,
-                            onValueChange = { editText = it },
-                            modifier = Modifier.weight(1f),
-                            colors = TextFieldDefaults.colors(
-                                focusedContainerColor = Color.Transparent,
-                                unfocusedContainerColor = Color.Transparent,
-                                focusedIndicatorColor = Color.Transparent,
-                                unfocusedIndicatorColor = Color.Transparent,
-                                cursorColor = Color.White,
-                                focusedTextColor = when {
-                                    editIsPink -> Color(0xFFFF69B4)
-                                    editIsImportant -> Color.Yellow
-                                    else -> Color.White
-                                },
-                                unfocusedTextColor = when {
-                                    editIsPink -> Color(0xFFFF69B4)
-                                    editIsImportant -> Color.Yellow
-                                    else -> Color.White
-                                }
-                            ),
-                            singleLine = true,
-                            textStyle = TextStyle(fontSize = 15.sp)
-                        )
-                        IconButton(onClick = {
-                            if (editText.isNotBlank()) {
-                                onUpdateReminder(reminder.id, editText, editIsImportant, editIsPink)
-                                editingId = null
-                            } else {
-                                onRemoveReminder(reminder.id)
-                                editingId = null
-                            }
-                        }, modifier = Modifier.size(32.dp)) {
-                            Icon(Icons.Default.Check, contentDescription = "Save", tint = Color(0xFF4A90E2))
-                        }
-                    }
-                } else {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                editingId = reminder.id
-                                editText = reminder.text
-                                editIsImportant = reminder.isImportant
-                                editIsPink = reminder.isPink
-                            }
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Default.PriorityHigh,
-                            contentDescription = "Important",
-                            tint = if (reminder.isImportant) Color.Yellow else Color.Transparent,
-                            modifier = Modifier.size(16.dp).padding(horizontal = 4.dp)
-                        )
-                        Icon(
-                            Icons.Default.Favorite,
-                            contentDescription = "Pink",
-                            tint = if (reminder.isPink) Color(0xFFFF69B4) else Color.Transparent,
-                            modifier = Modifier.size(16.dp).padding(horizontal = 4.dp)
-                        )
-                        Text(
-                            text = reminder.text,
-                            color = when {
-                                reminder.isPink -> Color(0xFFFF69B4)
-                                reminder.isImportant -> Color.Yellow
-                                else -> Color.White
-                            },
-                            fontSize = 15.sp,
-                            modifier = Modifier.weight(1f)
-                        )
-                        IconButton(onClick = { onRemoveReminder(reminder.id) }, modifier = Modifier.size(24.dp)) {
-                            Icon(Icons.Default.Close, contentDescription = "Delete", tint = Color.White.copy(alpha = 0.4f), modifier = Modifier.size(16.dp))
-                        }
-                    }
-                }
+        if (!hasPermission) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .clickable { onRequestPermission() },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "Grant Usage Stats Permission to see your phone usage.".uppercase(),
+                    color = Color.White.copy(alpha = 0.4f),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.padding(16.dp)
+                )
             }
-
-            if (isAdding) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = {
-                        isImportantNew = !isImportantNew
-                    }, modifier = Modifier.size(32.dp)) {
-                        Icon(
-                            Icons.Default.PriorityHigh,
-                            contentDescription = "Toggle Important",
-                            tint = if (isImportantNew) Color.Yellow else Color.White.copy(alpha = 0.2f),
-                            modifier = Modifier.size(16.dp)
-                        )
+        } else if (appUsage.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "No usage data available yet today.".uppercase(),
+                    color = Color.White.copy(alpha = 0.4f),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                appUsage.forEach { usage ->
+                    val hours = usage.totalTimeInForeground / (1000 * 60 * 60)
+                    val minutes = (usage.totalTimeInForeground / (1000 * 60)) % 60
+                    val timeStr = when {
+                        hours > 0 -> "${hours}h ${minutes}m"
+                        else -> "${minutes}m"
                     }
 
-                    IconButton(onClick = {
-                        isPinkNew = !isPinkNew
-                    }, modifier = Modifier.size(32.dp)) {
-                        Icon(
-                            Icons.Default.Favorite,
-                            contentDescription = "Toggle Pink",
-                            tint = if (isPinkNew) Color(0xFFFF69B4) else Color.White.copy(alpha = 0.2f),
-                            modifier = Modifier.size(16.dp)
-                        )
+                    val icon = remember(usage.packageName) {
+                        try {
+                            context.packageManager.getApplicationIcon(usage.packageName)
+                        } catch (e: Exception) {
+                            null
+                        }
                     }
 
-                    TextField(
-                        value = text,
-                        onValueChange = { text = it },
-                        modifier = Modifier.weight(1f),
-                        placeholder = { Text("Note to self...", color = Color.White.copy(alpha = 0.3f), fontSize = 15.sp) },
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = Color.Transparent,
-                            unfocusedContainerColor = Color.Transparent,
-                            focusedIndicatorColor = Color.Transparent,
-                            unfocusedIndicatorColor = Color.Transparent,
-                            cursorColor = Color.White,
-                            focusedTextColor = when {
-                                isPinkNew -> Color(0xFFFF69B4)
-                                isImportantNew -> Color.Yellow
-                                else -> Color.White
-                            },
-                            unfocusedTextColor = when {
-                                isPinkNew -> Color(0xFFFF69B4)
-                                isImportantNew -> Color.Yellow
-                                else -> Color.White
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (icon != null) {
+                                AsyncImage(
+                                    model = icon,
+                                    contentDescription = null,
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                )
+                                Spacer(Modifier.width(12.dp))
                             }
-                        ),
-                        singleLine = true,
-                        textStyle = TextStyle(fontSize = 15.sp)
-                    )
-                    IconButton(onClick = {
-                        if (text.isNotBlank()) {
-                            onAddReminder(text, isImportantNew, isPinkNew)
-                            text = ""
-                            isImportantNew = false
-                            isPinkNew = false
-                            isAdding = false
+                            Text(
+                                text = usage.name,
+                                color = Color.White,
+                                fontSize = 15.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
-                    }, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Default.Check, contentDescription = "Save", tint = Color(0xFF4A90E2))
+                        Text(
+                            text = timeStr,
+                            color = Color.White.copy(alpha = 0.6f),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium
+                        )
                     }
                 }
-            } else {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            isAdding = true
-                            isImportantNew = false
-                            isPinkNew = false
-                        }
-                        .padding(vertical = 8.dp, horizontal = 0.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(modifier = Modifier.size(24.dp))
-                    Text(
-                        if (reminders.isEmpty()) "Write a note to yourself..." else "Add another note...",
-                        color = Color.White.copy(alpha = 0.4f),
-                        fontSize = 15.sp
-                    )
-                }
+
+                /* Removed TOTAL SCREEN TIME footer as it moved to PresentScreen */
             }
         }
     }
 }
-

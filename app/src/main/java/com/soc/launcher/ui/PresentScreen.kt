@@ -54,7 +54,7 @@ fun PresentScreen(
     aiAppPackage: String,
     apps: List<AppInfo>,
     weatherApiKey: String,
-    hasImportantNote: Boolean
+    use24HourFormat: Boolean
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -79,13 +79,30 @@ fun PresentScreen(
         }
     }
 
+    val totalUsageTime by produceState(initialValue = "0m", apps, hasUsagePermission) {
+        while (true) {
+            if (hasUsagePermission) {
+                val usage = withContext(Dispatchers.IO) { getDailyAppUsage(context, apps) }
+                val totalMs = usage.sumOf { it.totalTimeInForeground }
+                val hours = totalMs / (1000 * 60 * 60)
+                val minutes = (totalMs / (1000 * 60)) % 60
+                value = when {
+                    hours > 0 -> "${hours}h ${minutes}m"
+                    else -> "${minutes}m"
+                }
+            }
+            delay(60000) // Update every minute
+        }
+    }
+
     var currentDate by remember { mutableStateOf(SimpleDateFormat("EEEE, MMMM d", Locale.getDefault()).format(Date())) }
 
-    val nextAlarm by produceState<String?>(initialValue = null) {
+    val allAlarms by produceState<List<String>>(initialValue = emptyList(), use24HourFormat) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         while (true) {
-            val alarm = alarmManager.nextAlarmClock
-            value = alarm?.let {
+            val next = alarmManager.nextAlarmClock
+            val alarms = mutableListOf<String>()
+            next?.let {
                 val alarmTime = it.triggerTime
                 val now = Calendar.getInstance()
                 val alarmCal = Calendar.getInstance().apply { timeInMillis = alarmTime }
@@ -95,12 +112,12 @@ fun PresentScreen(
                         now.get(Calendar.DAY_OF_YEAR) == alarmCal.get(Calendar.DAY_OF_YEAR)
 
                 if (isToday) {
-                    SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(alarmTime))
-                } else {
-                    null
+                    val pattern = if (use24HourFormat) "HH:mm" else "h:mm a"
+                    alarms.add(SimpleDateFormat(pattern, Locale.getDefault()).format(Date(alarmTime)))
                 }
             }
-            delay(10000) // Update every 10 seconds to keep it fresh
+            value = alarms
+            delay(10000)
         }
     }
 
@@ -132,7 +149,7 @@ fun PresentScreen(
         }
     }
 
-    val calendarEvents by produceState<List<String>>(initialValue = emptyList()) {
+    val calendarEvents by produceState<List<String>>(initialValue = emptyList(), use24HourFormat) {
         while (true) {
             if (context.checkSelfPermission(Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED) {
                 val events = mutableListOf<String>()
@@ -147,36 +164,39 @@ fun PresentScreen(
                 endOfDay.set(Calendar.MINUTE, 59)
                 endOfDay.set(Calendar.SECOND, 59)
 
+                // Use Instances to correctly handle recurring events
+                val builder = CalendarContract.Instances.CONTENT_URI.buildUpon()
+                android.content.ContentUris.appendId(builder, startOfDay.timeInMillis)
+                android.content.ContentUris.appendId(builder, endOfDay.timeInMillis)
+
                 val projection = arrayOf(
-                    CalendarContract.Events.TITLE,
-                    CalendarContract.Events.DTSTART,
-                    CalendarContract.Events.ALL_DAY
+                    CalendarContract.Instances.TITLE,
+                    CalendarContract.Instances.BEGIN,
+                    CalendarContract.Instances.ALL_DAY
                 )
                 
-                val selection = "(${CalendarContract.Events.DTSTART} >= ?) AND (${CalendarContract.Events.DTSTART} <= ?) AND (${CalendarContract.Events.DELETED} = 0)"
-                val selectionArgs = arrayOf(startOfDay.timeInMillis.toString(), endOfDay.timeInMillis.toString())
-                
                 context.contentResolver.query(
-                    CalendarContract.Events.CONTENT_URI,
+                    builder.build(),
                     projection,
-                    selection,
-                    selectionArgs,
-                    "${CalendarContract.Events.DTSTART} ASC"
+                    null,
+                    null,
+                    "${CalendarContract.Instances.BEGIN} ASC"
                 )?.use { cursor ->
-                    val titleIdx = cursor.getColumnIndex(CalendarContract.Events.TITLE)
-                    val startIdx = cursor.getColumnIndex(CalendarContract.Events.DTSTART)
-                    val allDayIdx = cursor.getColumnIndex(CalendarContract.Events.ALL_DAY)
+                    val titleIdx = cursor.getColumnIndex(CalendarContract.Instances.TITLE)
+                    val startIdx = cursor.getColumnIndex(CalendarContract.Instances.BEGIN)
+                    val allDayIdx = cursor.getColumnIndex(CalendarContract.Instances.ALL_DAY)
                     
                     while (cursor.moveToNext()) {
                         val title = cursor.getString(titleIdx)
                         val startTime = cursor.getLong(startIdx)
                         val allDay = cursor.getInt(allDayIdx) == 1
                         
-                        val timeStr = if (allDay) "All Day" else SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(startTime))
+                        val pattern = if (use24HourFormat) "HH:mm" else "h:mm a"
+                        val timeStr = if (allDay) "All Day" else SimpleDateFormat(pattern, Locale.getDefault()).format(Date(startTime))
                         events.add("$timeStr - $title")
                     }
                 }
-                value = events
+                value = events.distinct() // Remove duplicates if any
             }
             delay(300000) // Update every 5 minutes
         }
@@ -236,7 +256,71 @@ fun PresentScreen(
         ) {
             SearchBar(searchAppPackage, aiAppPackage)
 
-            Spacer(Modifier.height(32.dp))
+            weatherInfo?.let { weather ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(top = 16.dp)
+                ) {
+                    AsyncImage(
+                        model = "https://openweathermap.org/img/wn/${weather.weather[0].icon}@2x.png",
+                        contentDescription = null,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "${weather.main.temp.toInt()}°C - ${weather.weather[0].description}",
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        style = TextStyle(
+                            shadow = Shadow(
+                                color = Color.Black.copy(alpha = 1f),
+                                offset = Offset(0f, 0f),
+                                blurRadius = 6f
+                            )
+                        )
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            Column(
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalAlignment = Alignment.Start
+            ) {
+                StatItem("RAM: $memoryUsage%", Color.White, 16.sp) {
+                    val intent = Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)
+                    try { context.startActivity(intent) } catch (e: Exception) { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
+                }
+                StatItem("SSD: $storageUsage%", Color.White, 16.sp) {
+                    val intent = Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS)
+                    try { context.startActivity(intent) } catch (e: Exception) { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
+                }
+                StatItem("TEMP: ${batteryTemp}°C", Color.White, 16.sp) {
+                    val intent = Intent(Intent.ACTION_POWER_USAGE_SUMMARY)
+                    try { context.startActivity(intent) } catch (e: Exception) { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            if (hasUsagePermission) {
+                Text(
+                    text = "Screen Time: $totalUsageTime".uppercase(),
+                    color = Color.White,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                    style = TextStyle(
+                        shadow = Shadow(
+                            color = Color.Black.copy(alpha = 1f),
+                            offset = Offset(0f, 0f),
+                            blurRadius = 6f
+                        )
+                    )
+                )
+            }
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -321,40 +405,10 @@ fun PresentScreen(
                 }
             }
 
-            Spacer(Modifier.height(16.dp))
-
-            weatherInfo?.let { weather ->
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(vertical = 4.dp)
-                ) {
-                    AsyncImage(
-                        model = "https://openweathermap.org/img/wn/${weather.weather[0].icon}@2x.png",
-                        contentDescription = null,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = "${weather.main.temp.toInt()}°C - ${weather.weather[0].description}",
-                        color = Color.White,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        style = TextStyle(
-                            shadow = Shadow(
-                                color = Color.Black.copy(alpha = 1f),
-                                offset = Offset(0f, 0f),
-                                blurRadius = 6f
-                            )
-                        )
-                    )
-                }
-            }
-
-            nextAlarm?.let { alarm ->
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
+            if (allAlarms.isNotEmpty()) {
+                Column(
                     modifier = Modifier
-                        .padding(vertical = 4.dp)
+                        .padding(top = 16.dp)
                         .clickable {
                             val intent = Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS)
                             intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
@@ -378,63 +432,66 @@ fun PresentScreen(
                             }
                         }
                 ) {
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier.size(24.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Notifications,
-                            contentDescription = null,
-                            tint = Color.Black,
-                            modifier = Modifier
-                                .matchParentSize()
-                                .blur(2.dp)
-                        )
-                        Icon(
-                            imageVector = Icons.Default.Notifications,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.matchParentSize()
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = alarm,
-                        color = Color.White,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        style = TextStyle(
-                            shadow = Shadow(
-                                color = Color.Black.copy(alpha = 1f),
-                                offset = Offset(0f, 0f),
-                                blurRadius = 6f
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Notifications,
+                                contentDescription = null,
+                                tint = Color.Black,
+                                modifier = Modifier
+                                    .matchParentSize()
+                                    .blur(2.dp)
+                            )
+                            Icon(
+                                imageVector = Icons.Default.Notifications,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.matchParentSize()
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "NEXT ALARM",
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            style = TextStyle(
+                                shadow = Shadow(
+                                    color = Color.Black.copy(alpha = 1f),
+                                    offset = Offset(0f, 0f),
+                                    blurRadius = 6f
+                                )
                             )
                         )
-                    )
+                    }
+
+                    Column(
+                        modifier = Modifier.padding(start = 32.dp, top = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        allAlarms.forEach { alarm ->
+                            Text(
+                                text = alarm,
+                                color = Color.White.copy(alpha = 0.9f),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                style = TextStyle(
+                                    shadow = Shadow(
+                                        color = Color.Black.copy(alpha = 1f),
+                                        offset = Offset(0f, 0f),
+                                        blurRadius = 6f
+                                    )
+                                )
+                            )
+                        }
+                    }
                 }
             }
 
             Spacer(Modifier.height(16.dp))
-
-            Column(
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-                horizontalAlignment = Alignment.Start
-            ) {
-                StatItem("RAM: $memoryUsage%", Color.White, 16.sp) {
-                    val intent = Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)
-                    try { context.startActivity(intent) } catch (e: Exception) { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
-                }
-                StatItem("SSD: $storageUsage%", Color.White, 16.sp) {
-                    val intent = Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS)
-                    try { context.startActivity(intent) } catch (e: Exception) { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
-                }
-                StatItem("TEMP: ${batteryTemp}°C", Color.White, 16.sp) {
-                    val intent = Intent(Intent.ACTION_POWER_USAGE_SUMMARY)
-                    try { context.startActivity(intent) } catch (e: Exception) { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
-                }
-            }
-
-            Spacer(Modifier.height(24.dp))
 
             MediaControlSection()
         }
@@ -461,25 +518,6 @@ fun PresentScreen(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
         ) {
-            if (hasImportantNote) {
-                Text(
-                    text = "! IMPORTANT MESSAGE FROM YOURSELF !",
-                    color = Color.Yellow,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.sp,
-                    style = TextStyle(
-                        shadow = Shadow(
-                            color = Color.Black.copy(alpha = 1f),
-                            offset = Offset(0f, 0f),
-                            blurRadius = 6f
-                        )
-                    ),
-                    modifier = Modifier
-                        .align(Alignment.CenterHorizontally)
-                        .padding(bottom = 8.dp)
-                )
-            }
             Box(
                 modifier = Modifier
                     .fillMaxWidth()

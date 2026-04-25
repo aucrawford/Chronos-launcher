@@ -29,6 +29,12 @@ data class Reminder(
     val isPink: Boolean = false
 )
 
+data class AppUsageInfo(
+    val packageName: String,
+    val name: String,
+    val totalTimeInForeground: Long
+)
+
 data class MediaInfo(
     val title: String = "",
     val artist: String = "",
