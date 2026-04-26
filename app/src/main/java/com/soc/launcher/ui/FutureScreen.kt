@@ -1,16 +1,21 @@
 package com.soc.launcher.ui
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.util.Log
 import android.provider.ContactsContract
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -22,6 +27,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
@@ -57,19 +64,40 @@ fun FutureScreen(apps: List<AppInfo>) {
     val context = LocalContext.current
     var searchQuery by remember { mutableStateOf("") }
     
-    val filteredApps = remember(apps, searchQuery) {
-        if (searchQuery.isBlank()) {
-            apps
-        } else {
-            apps.filter { it.name.contains(searchQuery, ignoreCase = true) }
-        }
+    val sharedPrefs = remember { context.getSharedPreferences("launcher_prefs", Context.MODE_PRIVATE) }
+    var pinnedPackages by remember { mutableStateOf(sharedPrefs.getStringSet("pinned_apps", emptySet()) ?: emptySet()) }
+    var hiddenPackages by remember { mutableStateOf(sharedPrefs.getStringSet("hidden_apps", emptySet()) ?: emptySet()) }
+    var hiddenExpanded by remember { mutableStateOf(false) }
+
+    val pinnedApps = remember(apps, pinnedPackages) {
+        apps.filter { it.packageName in pinnedPackages }
+    }
+
+    val visibleApps = remember(apps, pinnedPackages, hiddenPackages) {
+        apps.filter { it.packageName !in pinnedPackages && it.packageName !in hiddenPackages }
+    }
+
+    val hiddenApps = remember(apps, hiddenPackages) {
+        apps.filter { it.packageName in hiddenPackages }
+    }
+
+    val filteredVisibleApps = remember(visibleApps, searchQuery) {
+        if (searchQuery.isBlank()) visibleApps else visibleApps.filter { it.name.contains(searchQuery, ignoreCase = true) }
+    }
+
+    val filteredPinnedApps = remember(pinnedApps, searchQuery) {
+        if (searchQuery.isBlank()) pinnedApps else pinnedApps.filter { it.name.contains(searchQuery, ignoreCase = true) }
+    }
+
+    val filteredHiddenApps = remember(hiddenApps, searchQuery) {
+        if (searchQuery.isBlank()) hiddenApps else hiddenApps.filter { it.name.contains(searchQuery, ignoreCase = true) }
     }
 
     val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ#".toList()
-    val sectionIndices = remember(filteredApps, searchQuery) {
+    val sectionIndices = remember(filteredVisibleApps, searchQuery) {
         if (searchQuery.isNotBlank()) emptyMap()
         else alphabet.map { char ->
-            val index = filteredApps.indexOfFirst {
+            val index = filteredVisibleApps.indexOfFirst {
                 if (char == '#') !it.name.first().isLetter()
                 else it.name.startsWith(char, ignoreCase = true)
             }
@@ -156,7 +184,7 @@ fun FutureScreen(apps: List<AppInfo>) {
                                     }
                                 }
 
-                                if (filteredApps.isNotEmpty()) {
+                                if (filteredVisibleApps.isNotEmpty() || filteredPinnedApps.isNotEmpty() || filteredHiddenApps.isNotEmpty()) {
                                     item(key = "apps_header") {
                                         if (searchedContacts.isNotEmpty()) {
                                             Spacer(Modifier.height(24.dp))
@@ -174,14 +202,51 @@ fun FutureScreen(apps: List<AppInfo>) {
                                 }
                             }
 
+                            // PINNED APPS
+                            if (filteredPinnedApps.isNotEmpty()) {
+                                if (searchQuery.isBlank()) {
+                                    item(key = "pinned_label") {
+                                        Text(
+                                            "PINNED",
+                                            color = Color(0xFF4A90E2),
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Black,
+                                            letterSpacing = 1.sp,
+                                            modifier = Modifier.padding(top = 24.dp, bottom = 8.dp)
+                                        )
+                                    }
+                                }
+                                items(
+                                    items = filteredPinnedApps,
+                                    key = { "pinned_${it.packageName}" },
+                                    contentType = { "app" }
+                                ) { app ->
+                                    AppRow(
+                                        app = app,
+                                        isPinned = true,
+                                        isHidden = false,
+                                        onPin = {
+                                            pinnedPackages = pinnedPackages - it.packageName
+                                            sharedPrefs.edit().putStringSet("pinned_apps", pinnedPackages).apply()
+                                        },
+                                        onHide = {
+                                            pinnedPackages = pinnedPackages - it.packageName
+                                            hiddenPackages = hiddenPackages + it.packageName
+                                            sharedPrefs.edit().putStringSet("pinned_apps", pinnedPackages).putStringSet("hidden_apps", hiddenPackages).apply()
+                                        }
+                                    )
+                                }
+                            }
+
+                            // VISIBLE APPS
                             items(
-                                count = filteredApps.size,
-                                key = { index -> "app_${filteredApps[index].packageName}" },
+                                count = filteredVisibleApps.size,
+                                key = { index -> "app_${filteredVisibleApps[index].packageName}" },
                                 contentType = { "app" }
                             ) { index ->
-                                val app = filteredApps[index]
+                                val app = filteredVisibleApps[index]
                                 val firstChar = app.name.first().uppercaseChar()
-                                val isFirstInCategory = (index == 0 || filteredApps[index - 1].name.first().uppercaseChar() != firstChar) && searchQuery.isBlank()
+                                val isFirstInCategory = (index == 0 || filteredVisibleApps[index - 1].name.first().uppercaseChar() != firstChar) && searchQuery.isBlank()
 
                                 if (isFirstInCategory) {
                                     Text(
@@ -193,7 +258,94 @@ fun FutureScreen(apps: List<AppInfo>) {
                                     )
                                 }
 
-                                AppRow(app)
+                                AppRow(
+                                    app = app,
+                                    isPinned = false,
+                                    isHidden = false,
+                                    onPin = {
+                                        pinnedPackages = pinnedPackages + it.packageName
+                                        sharedPrefs.edit().putStringSet("pinned_apps", pinnedPackages).apply()
+                                    },
+                                    onHide = {
+                                        hiddenPackages = hiddenPackages + it.packageName
+                                        sharedPrefs.edit().putStringSet("hidden_apps", hiddenPackages).apply()
+                                    }
+                                )
+                            }
+
+                            // HIDDEN APPS
+                            if (filteredHiddenApps.isNotEmpty()) {
+                                if (searchQuery.isBlank()) {
+                                    item(key = "hidden_header") {
+                                        Spacer(Modifier.height(32.dp))
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable { hiddenExpanded = !hiddenExpanded }
+                                                .padding(vertical = 12.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                "HIDDEN (${filteredHiddenApps.size})",
+                                                color = Color.White.copy(alpha = 0.3f),
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Black,
+                                                letterSpacing = 1.sp
+                                            )
+                                            Icon(
+                                                imageVector = if (hiddenExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                                contentDescription = null,
+                                                tint = Color.White.copy(alpha = 0.2f),
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                    if (hiddenExpanded) {
+                                        items(
+                                            items = filteredHiddenApps,
+                                            key = { "hidden_${it.packageName}" },
+                                            contentType = { "app" }
+                                        ) { app ->
+                                            AppRow(
+                                                app = app,
+                                                isPinned = false,
+                                                isHidden = true,
+                                                onPin = {
+                                                    hiddenPackages = hiddenPackages - it.packageName
+                                                    pinnedPackages = pinnedPackages + it.packageName
+                                                    sharedPrefs.edit().putStringSet("hidden_apps", hiddenPackages).putStringSet("pinned_apps", pinnedPackages).apply()
+                                                },
+                                                onHide = {
+                                                    hiddenPackages = hiddenPackages - it.packageName
+                                                    sharedPrefs.edit().putStringSet("hidden_apps", hiddenPackages).apply()
+                                                }
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    // In search, show hidden apps if they match, but maybe with a subtle indicator
+                                    items(
+                                        items = filteredHiddenApps,
+                                        key = { "hidden_search_${it.packageName}" },
+                                        contentType = { "app" }
+                                    ) { app ->
+                                        AppRow(
+                                            app = app,
+                                            isPinned = false,
+                                            isHidden = true,
+                                            onPin = {
+                                                hiddenPackages = hiddenPackages - it.packageName
+                                                pinnedPackages = pinnedPackages + it.packageName
+                                                sharedPrefs.edit().putStringSet("hidden_apps", hiddenPackages).putStringSet("pinned_apps", pinnedPackages).apply()
+                                            },
+                                            onHide = {
+                                                hiddenPackages = hiddenPackages - it.packageName
+                                                sharedPrefs.edit().putStringSet("hidden_apps", hiddenPackages).apply()
+                                            }
+                                        )
+                                    }
+                                }
                             }
                         }
 
@@ -365,29 +517,97 @@ fun ContactRow(contact: ContactInfo) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun AppRow(app: AppInfo) {
+fun AppRow(
+    app: AppInfo,
+    isPinned: Boolean,
+    isHidden: Boolean,
+    onPin: (AppInfo) -> Unit,
+    onHide: (AppInfo) -> Unit
+) {
     val context = LocalContext.current
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable {
-                val intent = context.packageManager.getLaunchIntentForPackage(app.packageName)
-                if (intent != null) {
-                    try { context.startActivity(intent) } catch (e: Exception) {}
+    var showMenu by remember { mutableStateOf(false) }
+
+    Box {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .combinedClickable(
+                    onClick = {
+                        val intent = context.packageManager.getLaunchIntentForPackage(app.packageName)
+                        if (intent != null) {
+                            try {
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                            }
+                        }
+                    },
+                    onLongClick = { showMenu = true }
+                )
+                .padding(vertical = 10.dp)
+        ) {
+            val icon = remember(app.packageName) {
+                try {
+                    context.packageManager.getApplicationIcon(app.packageName)
+                } catch (e: Exception) {
+                    null
                 }
             }
-            .padding(vertical = 10.dp)
-    ) {
-        val icon = remember(app.packageName) {
-            try { context.packageManager.getApplicationIcon(app.packageName) } catch (e: Exception) { null }
+            if (icon != null) {
+                Image(
+                    bitmap = icon.toBitmap().asImageBitmap(),
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .then(if (isHidden) Modifier.background(Color.Black.copy(alpha = 0.5f)) else Modifier)
+                )
+                Spacer(Modifier.width(16.dp))
+            }
+            Text(
+                text = app.name,
+                color = if (isHidden) Color.White.copy(alpha = 0.3f) else Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium
+            )
         }
-        if (icon != null) {
-            Image(bitmap = icon.toBitmap().asImageBitmap(), contentDescription = null, modifier = Modifier.size(36.dp))
-            Spacer(Modifier.width(16.dp))
+
+        DropdownMenu(
+            expanded = showMenu,
+            onDismissRequest = { showMenu = false },
+            modifier = Modifier.background(Color(0xFF2A2A2A))
+        ) {
+            DropdownMenuItem(
+                text = { Text(if (isPinned) "Unpin app" else "Pin app", color = Color.White) },
+                onClick = {
+                    onPin(app)
+                    showMenu = false
+                }
+            )
+            DropdownMenuItem(
+                text = { Text(if (isHidden) "Unhide app" else "Hide app", color = Color.White) },
+                onClick = {
+                    onHide(app)
+                    showMenu = false
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("Uninstall app", color = Color.Red) },
+                onClick = {
+                    showMenu = false
+                    try {
+                        Log.d("ChronosLauncher", "Triggering uninstall for: ${app.packageName}")
+                        val intent = Intent(Intent.ACTION_DELETE).apply {
+                            data = Uri.fromParts("package", app.packageName, null)
+                        }
+                        context.startActivity(intent)
+                    } catch (e: Exception) {
+                        Log.e("ChronosLauncher", "Failed to start uninstall intent", e)
+                    }
+                }
+            )
         }
-        Text(app.name, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
     }
 }
 

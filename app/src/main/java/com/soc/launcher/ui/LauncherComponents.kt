@@ -40,6 +40,9 @@ import com.soc.launcher.MediaNotificationListener
 import com.soc.launcher.data.model.AppInfo
 import com.soc.launcher.isNotificationServiceEnabled
 import android.net.Uri
+import android.content.Context
+import android.content.pm.PackageManager
+import android.view.inputmethod.InputMethodManager
 
 @Composable
 fun StatItem(text: String, color: Color, fontSize: TextUnit, onClick: () -> Unit) {
@@ -167,7 +170,7 @@ fun MediaControlSection() {
 }
 
 @Composable
-fun SearchBar(searchPkg: String, aiPkg: String) {
+fun SearchBar(aiPkg: String) {
     var query by remember { mutableStateOf("") }
     val context = LocalContext.current
 
@@ -184,11 +187,10 @@ fun SearchBar(searchPkg: String, aiPkg: String) {
             contentDescription = null,
             tint = Color.White.copy(alpha = 0.7f),
             modifier = Modifier.clickable {
-                val intent = context.packageManager.getLaunchIntentForPackage(searchPkg)
-                if (intent != null) {
-                    try {
-                        context.startActivity(intent)
-                    } catch (e: Exception) {}
+                val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com"))
+                val resolveInfo = context.packageManager.resolveActivity(browserIntent, PackageManager.MATCH_DEFAULT_ONLY)
+                if (resolveInfo != null) {
+                    context.startActivity(browserIntent)
                 }
             }
         )
@@ -212,18 +214,43 @@ fun SearchBar(searchPkg: String, aiPkg: String) {
                     val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=$query"))
                     context.startActivity(intent)
                     query = ""
+                    // Hide keyboard
+                    val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                    imm?.hideSoftInputFromWindow(null, 0)
                 }
             })
         )
         IconButton(onClick = {
-            val intent = context.packageManager.getLaunchIntentForPackage(aiPkg)
-            if (intent != null) {
-                try {
-                    context.startActivity(intent)
-                } catch (e: Exception) {}
+            if (aiPkg.isNotEmpty()) {
+                val intent = context.packageManager.getLaunchIntentForPackage(aiPkg)
+                if (intent != null) {
+                    try {
+                        context.startActivity(intent)
+                        return@IconButton
+                    } catch (e: Exception) {}
+                }
+            }
+
+            // Fallback to system assistant if specific package fails
+            val assistantIntent = Intent(Intent.ACTION_ASSIST)
+            try {
+                context.startActivity(assistantIntent)
+            } catch (e: Exception) {
+                Log.e("ChronosLauncher", "Failed to launch any assistant", e)
             }
         }) {
             Icon(Icons.Default.AutoAwesome, contentDescription = "AI", tint = Color(0xFF4A90E2))
+        }
+    }
+}
+
+private fun launchSpecificAi(context: Context, pkg: String) {
+    if (pkg.isNotEmpty()) {
+        val intent = context.packageManager.getLaunchIntentForPackage(pkg)
+        if (intent != null) {
+            try {
+                context.startActivity(intent)
+            } catch (e: Exception) {}
         }
     }
 }

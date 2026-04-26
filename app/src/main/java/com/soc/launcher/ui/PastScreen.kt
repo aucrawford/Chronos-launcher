@@ -56,8 +56,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import retrofit2.Retrofit
-import retrofit2.converter.gson.GsonConverterFactory
 import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.*
@@ -65,7 +63,6 @@ import java.util.*
 @Composable
 fun PastScreen(
     newsAppPackage: String,
-    newsApiKey: String,
     apps: List<AppInfo>
 ) {
     val context = LocalContext.current
@@ -109,76 +106,12 @@ fun PastScreen(
 
     val coroutineScope = rememberCoroutineScope()
 
-    val newsArticles by produceState<List<NewsArticle>>(initialValue = emptyList(), newsApiKey) {
+    val newsArticles by produceState<List<NewsArticle>>(initialValue = emptyList()) {
         value = withContext(Dispatchers.IO) {
             try {
-                val calendar = Calendar.getInstance()
-                val dateStr = SimpleDateFormat("MMMM yyyy", Locale.getDefault()).format(calendar.time)
-
-                // Get city name from coordinates
-                var cityName = "US"
-                try {
-                    val geocoder = android.location.Geocoder(context, Locale.getDefault())
-                    val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
-                    if (context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-                        val locationTask = fusedLocationClient.lastLocation
-                        val location = withContext(Dispatchers.IO) {
-                            try {
-                                com.google.android.gms.tasks.Tasks.await(locationTask)
-                            } catch (e: Exception) {
-                                null
-                            }
-                        }
-                        if (location != null) {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                val geocodeListener = object : android.location.Geocoder.GeocodeListener {
-                                    override fun onGeocode(addresses: MutableList<android.location.Address>) {
-                                        if (addresses.isNotEmpty()) {
-                                            cityName = addresses[0].locality ?: addresses[0].adminArea ?: "US"
-                                        }
-                                    }
-                                    override fun onError(errorMessage: String?) {
-                                        Log.e("ChronosLauncher", "Geocoder error: $errorMessage")
-                                    }
-                                }
-                                geocoder.getFromLocation(location.latitude, location.longitude, 1, geocodeListener)
-                                delay(800)
-                            } else {
-                                @Suppress("DEPRECATION")
-                                val addresses = withContext(Dispatchers.IO) {
-                                    try {
-                                        geocoder.getFromLocation(location.latitude, location.longitude, 1)
-                                    } catch (e: Exception) {
-                                        null
-                                    }
-                                }
-                                if (!addresses.isNullOrEmpty()) {
-                                    cityName = addresses[0].locality ?: addresses[0].adminArea ?: "US"
-                                }
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e("ChronosLauncher", "Geocoder failed", e)
-                }
-
-                val searchQuery = "$cityName news $dateStr"
-                Log.d("ChronosLauncher", "Searching news for: $searchQuery")
-
-                if (newsApiKey.isNotBlank()) {
-                    val retrofit = Retrofit.Builder()
-                        .baseUrl("https://newsapi.org/v2/")
-                        .addConverterFactory(GsonConverterFactory.create())
-                        .build()
-                    val api = retrofit.create(NewsOrgApi::class.java)
-                    val response = api.getEverything(searchQuery, "publishedAt", newsApiKey)
-                    response.articles.take(10).map { it.copy(source = it.source ?: it.title.substringAfterLast(" - ").trim()) }
-                } else {
-                    val encodedQuery = java.net.URLEncoder.encode(searchQuery, "UTF-8")
-                    val rssUrl = "https://news.google.com/rss/search?q=$encodedQuery&hl=en-US&gl=US&ceid=US:en"
-                    withContext(Dispatchers.IO) {
-                        NewsParser.parseRss(URL(rssUrl).openStream())
-                    }
+                val rssUrl = "https://feedx.net/rss/ap.xml"
+                withContext(Dispatchers.IO) {
+                    NewsParser.parseRss(URL(rssUrl).openStream())
                 }
             } catch (e: Exception) {
                 Log.e("ChronosLauncher", "News fetch failed", e)

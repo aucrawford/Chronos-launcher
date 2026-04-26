@@ -23,14 +23,39 @@ object NewsParser {
             
             var imageUrl: String? = null
             try {
-                val description = item.getElementsByTagName("description").item(0)?.textContent
-                if (description != null) {
-                    val imgMatch = "src=\"([^\"]+)\"".toRegex().find(description)
-                    imageUrl = imgMatch?.groupValues?.get(1)
-                    if (imageUrl?.startsWith("//") == true) imageUrl = "https:$imageUrl"
+                // Try to find image in enclosure or media:content tags first (better quality)
+                val enclosures = item.getElementsByTagName("enclosure")
+                if (enclosures.length > 0) {
+                    val enclosure = enclosures.item(0) as Element
+                    imageUrl = enclosure.getAttribute("url")
                 }
+                
+                if (imageUrl == null) {
+                    val mediaContents = item.getElementsByTagName("media:content")
+                    if (mediaContents.length > 0) {
+                        val media = mediaContents.item(0) as Element
+                        imageUrl = media.getAttribute("url")
+                    }
+                }
+
+                if (imageUrl == null) {
+                    val description = item.getElementsByTagName("description").item(0)?.textContent
+                    if (description != null) {
+                        // Look for standard img tags
+                        val imgMatch = "<img[^>]+src=\"([^\"]+)\"".toRegex(RegexOption.IGNORE_CASE).find(description)
+                        imageUrl = imgMatch?.groupValues?.get(1)
+                        
+                        // Handle Google News specific encoding if necessary
+                        if (imageUrl == null) {
+                            val urlMatch = "url=([^&\"\\s]+)".toRegex().find(description)
+                            imageUrl = urlMatch?.groupValues?.get(1)
+                        }
+                    }
+                }
+                
+                if (imageUrl?.startsWith("//") == true) imageUrl = "https:$imageUrl"
             } catch (e: Exception) {
-                // In a real app we might use a logger, but for unit tests we can't use android.util.Log
+                Log.e("NewsParser", "Error parsing image: ${e.message}")
             }
             
             articles.add(NewsArticle(title, link, source, imageUrl))

@@ -10,9 +10,6 @@ data class WeatherResponse(
 data class Main(val temp: Float, val humidity: Int)
 data class Weather(val description: String, val icon: String)
 
-data class OkSurfResponse(val US: List<OkSurfArticle>? = null, val World: List<OkSurfArticle>? = null)
-data class OkSurfArticle(val title: String, val link: String)
-data class NewsOrgResponse(val articles: List<NewsArticle>)
 data class NewsArticle(val title: String, val url: String, val source: String? = null, val urlToImage: String? = null)
 
 data class MissedCallInfo(val id: String, val name: String, val number: String, val count: Int)

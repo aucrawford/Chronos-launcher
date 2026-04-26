@@ -10,8 +10,10 @@ import android.app.ActivityManager
 import android.app.AppOpsManager
 import android.app.WallpaperManager
 import android.app.usage.UsageStatsManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
@@ -114,7 +116,6 @@ import androidx.compose.material.icons.filled.PriorityHigh
 import androidx.compose.ui.text.TextStyle
 import com.google.gson.reflect.TypeToken
 import com.google.gson.Gson
-import java.text.SimpleDateFormat
 import java.util.*
 
 interface WeatherApi {
@@ -125,26 +126,6 @@ interface WeatherApi {
         @Query("units") units: String,
         @Query("appid") apiKey: String
     ): WeatherResponse
-}
-
-interface NewsApi {
-    @GET("api/v1/cors/news-feed")
-    suspend fun getTopHeadlines(): OkSurfResponse
-}
-
-interface NewsOrgApi {
-    @GET("top-headlines")
-    suspend fun getTopHeadlines(
-        @Query("country") country: String,
-        @Query("apiKey") apiKey: String
-    ): NewsOrgResponse
-
-    @GET("everything")
-    suspend fun getEverything(
-        @Query("q") query: String,
-        @Query("sortBy") sortBy: String,
-        @Query("apiKey") apiKey: String
-    ): NewsOrgResponse
 }
 
 class MainActivity : ComponentActivity() {
@@ -195,6 +176,28 @@ fun TemporalLauncher() {
 
     val wallpaperManager = remember { WallpaperManager.getInstance(context) }
 
+    var refreshAppsCounter by remember { mutableStateOf(0) }
+
+    DisposableEffect(Unit) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                Log.d("ChronosLauncher", "Package broadcast received: ${intent?.action}")
+                refreshAppsCounter++
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_PACKAGE_ADDED)
+            addAction(Intent.ACTION_PACKAGE_REMOVED)
+            addAction(Intent.ACTION_PACKAGE_REPLACED)
+            addAction(Intent.ACTION_PACKAGE_CHANGED)
+            addDataScheme("package")
+        }
+        context.registerReceiver(receiver, filter)
+        onDispose {
+            context.unregisterReceiver(receiver)
+        }
+    }
+
     val wallpaperPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         Manifest.permission.READ_MEDIA_IMAGES
     } else {
@@ -231,34 +234,24 @@ fun TemporalLauncher() {
         }
     }
     
-    val apps by produceState<List<AppInfo>>(initialValue = emptyList()) {
+    val apps by produceState<List<AppInfo>>(initialValue = emptyList(), refreshAppsCounter) {
         withContext(Dispatchers.IO) {
             val result = getInstalledApps(context)
-            Log.d("TemporalLauncher", "Loaded ${result.size} apps")
+            Log.d("TemporalLauncher", "Loaded ${result.size} apps (refresh: $refreshAppsCounter)")
             value = result
         }
     }
 
-    var backgroundImageUri by remember { mutableStateOf(sharedPrefs.getString("bg_uri", null)) }
-    var searchAppPackage by remember { mutableStateOf(sharedPrefs.getString("search_pkg", "com.google.android.googlequicksearchbox") ?: "com.google.android.googlequicksearchbox") }
     var aiAppPackage by remember { mutableStateOf(sharedPrefs.getString("ai_pkg", "com.google.android.apps.bard") ?: "com.google.android.apps.bard") }
     var newsAppPackage by remember { mutableStateOf(sharedPrefs.getString("news_pkg", "com.google.android.apps.magazines") ?: "com.google.android.apps.magazines") }
     var weatherApiKey by remember { mutableStateOf(sharedPrefs.getString("weather_api_key", "") ?: "") }
-    var newsApiKey by remember { mutableStateOf(sharedPrefs.getString("news_api_key", "") ?: "") }
     var use24HourFormat by remember { mutableStateOf(sharedPrefs.getBoolean("use_24h", false)) }
 
     val pagerState = rememberPagerState(initialPage = 1, pageCount = { 3 })
     var showSettings by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        if (backgroundImageUri != null) {
-            AsyncImage(
-                model = backgroundImageUri,
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
-            )
-        } else if (defaultWallpaper != null) {
+        if (defaultWallpaper != null) {
             Image(
                 bitmap = defaultWallpaper!!.asImageBitmap(),
                 contentDescription = null,
@@ -296,11 +289,9 @@ fun TemporalLauncher() {
                 when (page) {
                     0 -> PastScreen(
                         newsAppPackage = newsAppPackage,
-                        newsApiKey = newsApiKey,
                         apps = apps
                     )
                     1 -> PresentScreen(
-                        searchAppPackage = searchAppPackage,
                         aiAppPackage = aiAppPackage,
                         apps = apps,
                         weatherApiKey = weatherApiKey,
@@ -314,21 +305,11 @@ fun TemporalLauncher() {
         if (showSettings) {
             SettingsDialog(
                 onDismiss = { showSettings = false },
-                onBgSelected = { uri ->
-                    backgroundImageUri = uri
-                    sharedPrefs.edit().putString("bg_uri", uri).apply()
-                },
+                currentAiPkg = aiAppPackage,
                 onAppSelected = { type, pkg ->
                     when (type) {
-                        "search" -> { searchAppPackage = pkg; sharedPrefs.edit().putString("search_pkg", pkg).apply() }
                         "ai" -> { aiAppPackage = pkg; sharedPrefs.edit().putString("ai_pkg", pkg).apply() }
-                        "news" -> { newsAppPackage = pkg; sharedPrefs.edit().putString("news_pkg", pkg).apply() }
                     }
-                },
-                newsApiKey = newsApiKey,
-                onNewsApiKeyChanged = { key ->
-                    newsApiKey = key
-                    sharedPrefs.edit().putString("news_api_key", key).apply()
                 },
                 weatherApiKey = weatherApiKey,
                 onApiKeyChanged = { key ->

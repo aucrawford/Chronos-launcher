@@ -4,7 +4,7 @@ app/build/
 
 # Gradle
 .gradle/
-/local.properties
+local.properties
 
 # Android Studio / IDE
 .idea/
