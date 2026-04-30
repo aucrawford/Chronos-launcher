@@ -17,8 +17,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -43,9 +41,7 @@ fun SettingsDialog(
     currentAiPkg: String,
     onAppSelected: (String, String) -> Unit,
     weatherApiKey: String,
-    onApiKeyChanged: (String) -> Unit,
-    use24HourFormat: Boolean,
-    onUse24HourFormatChanged: (Boolean) -> Unit
+    onApiKeyChanged: (String) -> Unit
 ) {
     val context = LocalContext.current
     val apps by produceState<List<AppInfo>>(initialValue = emptyList()) {
@@ -121,29 +117,6 @@ fun SettingsDialog(
                 ) { onAppSelected("ai", it) }
 
                 Spacer(Modifier.height(24.dp))
-                Text("Time Display", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onUse24HourFormatChanged(!use24HourFormat) }
-                        .padding(vertical = 12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Use 24-hour format", color = Color.White, fontSize = 14.sp)
-                    Switch(
-                        checked = use24HourFormat,
-                        onCheckedChange = onUse24HourFormatChanged,
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = Color.Gray,
-                            uncheckedThumbColor = Color.Gray,
-                            uncheckedTrackColor = Color.Black
-                        )
-                    )
-                }
-
-                Spacer(Modifier.height(24.dp))
                 Text("Weather", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
@@ -180,10 +153,10 @@ fun SettingsDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("Permissions", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                    Icon(
-                        imageVector = if (permissionsExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                        contentDescription = null,
-                        tint = Color.Gray
+                    Text(
+                        text = if (permissionsExpanded) "▲" else "▼",
+                        color = Color.Gray,
+                        fontSize = 12.sp
                     )
                 }
 

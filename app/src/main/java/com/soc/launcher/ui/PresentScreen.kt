@@ -1,13 +1,17 @@
 package com.soc.launcher.ui
 
+import android.Manifest
 import android.app.AlarmManager
 import android.content.Context
-import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.net.Uri
 import android.provider.Settings
 import android.util.Log
+import android.text.format.DateFormat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -30,21 +34,15 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.foundation.shape.RoundedCornerShape
 import android.provider.CalendarContract
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CalendarToday
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.PriorityHigh
 import androidx.compose.material3.Icon
-import coil.compose.AsyncImage
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
 import com.soc.launcher.*
 import com.soc.launcher.data.model.AppInfo
 import com.soc.launcher.data.model.WeatherResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import retrofit2.Retrofit
-import retrofit2.converter.gson.GsonConverterFactory
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -52,11 +50,12 @@ import java.util.*
 fun PresentScreen(
     aiAppPackage: String,
     apps: List<AppInfo>,
-    weatherApiKey: String,
-    use24HourFormat: Boolean
+    weatherApiKey: String
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+
+    val use24HourFormat = DateFormat.is24HourFormat(context)
 
     var hasUsagePermission by remember { mutableStateOf(hasUsageStatsPermission(context)) }
 
@@ -78,11 +77,10 @@ fun PresentScreen(
         }
     }
 
-    val totalUsageTime by produceState(initialValue = "0m", apps, hasUsagePermission) {
+    val totalUsageTime by produceState(initialValue = "0m", hasUsagePermission) {
         while (true) {
             if (hasUsagePermission) {
-                val usage = withContext(Dispatchers.IO) { getDailyAppUsage(context, apps) }
-                val totalMs = usage.sumOf { it.totalTimeInForeground }
+                val totalMs = withContext(Dispatchers.IO) { getScreenOnTime(context) }
                 val hours = totalMs / (1000 * 60 * 60)
                 val minutes = (totalMs / (1000 * 60)) % 60
                 value = when {
@@ -184,12 +182,12 @@ fun PresentScreen(
                     val titleIdx = cursor.getColumnIndex(CalendarContract.Instances.TITLE)
                     val startIdx = cursor.getColumnIndex(CalendarContract.Instances.BEGIN)
                     val allDayIdx = cursor.getColumnIndex(CalendarContract.Instances.ALL_DAY)
-                    
+
                     while (cursor.moveToNext()) {
                         val title = cursor.getString(titleIdx)
                         val startTime = cursor.getLong(startIdx)
                         val allDay = cursor.getInt(allDayIdx) == 1
-                        
+
                         val pattern = if (use24HourFormat) "HH:mm" else "h:mm a"
                         val timeStr = if (allDay) "All Day" else SimpleDateFormat(pattern, Locale.getDefault()).format(Date(startTime))
                         events.add("$timeStr - $title")
@@ -209,7 +207,7 @@ fun PresentScreen(
             return@LaunchedEffect
         }
 
-        val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
+        val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
 
         while (true) {
             try {
@@ -217,27 +215,16 @@ fun PresentScreen(
                 var lon = -74.0060
 
                 if (context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-                    try {
-                        val locationTask = fusedLocationClient.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, null)
-                        val location = withContext(Dispatchers.IO) {
-                            com.google.android.gms.tasks.Tasks.await(locationTask)
-                        }
-                        if (location != null) {
-                            lat = location.latitude
-                            lon = location.longitude
-                        }
-                    } catch (e: Exception) {
-                        Log.e("TemporalLauncher", "Location fetch failed", e)
+                    val location = locationManager.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER) 
+                        ?: locationManager.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER)
+                    
+                    if (location != null) {
+                        lat = location.latitude
+                        lon = location.longitude
                     }
                 }
 
-                val retrofit = Retrofit.Builder()
-                    .baseUrl("https://api.openweathermap.org/data/2.5/")
-                    .addConverterFactory(GsonConverterFactory.create())
-                    .build()
-                val api = retrofit.create(WeatherApi::class.java)
-
-                val response = api.getCurrentWeather(lat, lon, "metric", weatherApiKey)
+                val response = WeatherService.getCurrentWeather(lat, lon, "metric", weatherApiKey)
                 weatherInfo = response
             } catch (e: Exception) {
                 Log.e("TemporalLauncher", "Weather fetch failed", e)
@@ -261,10 +248,11 @@ fun PresentScreen(
                 Row(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    AsyncImage(
-                        model = "https://openweathermap.org/img/wn/${weather.weather[0].icon}@2x.png",
-                        contentDescription = null,
-                        modifier = Modifier.size(28.dp)
+                    // Replaced Coil AsyncImage with a simple Text or placeholder since we removed the library
+                    Text(
+                        text = "☁", // Placeholder for weather icon
+                        fontSize = 24.sp,
+                        color = Color.White
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
@@ -292,7 +280,7 @@ fun PresentScreen(
                     val intent = Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)
                     try { context.startActivity(intent) } catch (e: Exception) { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
                 }
-                StatItem("SSD: $storageUsage%", Color.White, 16.sp) {
+                StatItem("STORAGE: $storageUsage%", Color.White, 16.sp) {
                     val intent = Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS)
                     try { context.startActivity(intent) } catch (e: Exception) { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
                 }
@@ -353,7 +341,7 @@ fun PresentScreen(
                         modifier = Modifier.size(24.dp)
                     ) {
                         Icon(
-                            imageVector = Icons.Default.CalendarToday,
+                            imageVector = Icons.Default.DateRange,
                             contentDescription = null,
                             tint = Color.Black,
                             modifier = Modifier
@@ -361,7 +349,7 @@ fun PresentScreen(
                                 .blur(2.dp)
                         )
                         Icon(
-                            imageVector = Icons.Default.CalendarToday,
+                            imageVector = Icons.Default.DateRange,
                             contentDescription = null,
                             tint = Color.White,
                             modifier = Modifier.matchParentSize()

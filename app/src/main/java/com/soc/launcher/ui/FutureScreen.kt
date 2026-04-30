@@ -24,11 +24,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+// Removed material-icons-extended and coil
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
@@ -49,7 +47,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
-import coil.compose.AsyncImage
 import com.soc.launcher.getFavoriteContacts
 import com.soc.launcher.searchContacts
 import com.soc.launcher.data.model.AppInfo
@@ -293,11 +290,10 @@ fun FutureScreen(apps: List<AppInfo>) {
                                                 fontWeight = FontWeight.Black,
                                                 letterSpacing = 1.sp
                                             )
-                                            Icon(
-                                                imageVector = if (hiddenExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                                contentDescription = null,
-                                                tint = Color.White.copy(alpha = 0.2f),
-                                                modifier = Modifier.size(16.dp)
+                                            Text(
+                                                text = if (hiddenExpanded) "▲" else "▼",
+                                                color = Color.White.copy(alpha = 0.2f),
+                                                fontSize = 12.sp
                                             )
                                         }
                                     }
@@ -422,11 +418,10 @@ fun FavoritesSidebar(favoriteContacts: List<ContactInfo>, hasPermission: Boolean
                 Icon(Icons.Default.Settings, contentDescription = "Contacts Permission", tint = Color.White.copy(alpha = 0.6f))
             }
         } else if (favoriteContacts.isEmpty()) {
-            Icon(
-                Icons.Default.AutoAwesome,
-                contentDescription = null,
-                tint = Color.White.copy(alpha = 0.1f),
-                modifier = Modifier.size(24.dp)
+            Text(
+                "★",
+                color = Color.White.copy(alpha = 0.1f),
+                fontSize = 24.sp
             )
         } else {
             Column(
@@ -458,6 +453,19 @@ fun FavoritesSidebar(favoriteContacts: List<ContactInfo>, hasPermission: Boolean
 @Composable
 fun ContactAvatar(contact: ContactInfo, onClick: (() -> Unit)? = null) {
     val context = LocalContext.current
+    val photoBitmap by produceState<android.graphics.Bitmap?>(initialValue = null, contact.photoUri) {
+        if (contact.photoUri != null) {
+            withContext(Dispatchers.IO) {
+                try {
+                    val inputStream = context.contentResolver.openInputStream(Uri.parse(contact.photoUri))
+                    value = android.graphics.BitmapFactory.decodeStream(inputStream)
+                } catch (e: Exception) {
+                    Log.e("ChronosLauncher", "Error loading contact photo", e)
+                }
+            }
+        }
+    }
+
     Box(
         modifier = Modifier
             .size(44.dp)
@@ -470,13 +478,14 @@ fun ContactAvatar(contact: ContactInfo, onClick: (() -> Unit)? = null) {
                 }
             }
     ) {
-        if (contact.photoUri != null) {
-            AsyncImage(
-                model = contact.photoUri,
-                contentDescription = contact.name,
+        if (photoBitmap != null) {
+            Image(
+                bitmap = photoBitmap!!.asImageBitmap(),
+                contentDescription = null,
                 modifier = Modifier
                     .fillMaxSize()
-                    .clip(RoundedCornerShape(14.dp)),
+                    .clip(RoundedCornerShape(14.dp))
+                    .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(14.dp)),
                 contentScale = ContentScale.Crop
             )
         } else {
@@ -550,14 +559,14 @@ fun AppRow(
         ) {
             val icon = remember(app.packageName) {
                 try {
-                    context.packageManager.getApplicationIcon(app.packageName)
+                    context.packageManager.getApplicationIcon(app.packageName).toBitmap().asImageBitmap()
                 } catch (e: Exception) {
                     null
                 }
             }
             if (icon != null) {
                 Image(
-                    bitmap = icon.toBitmap().asImageBitmap(),
+                    bitmap = icon,
                     contentDescription = null,
                     modifier = Modifier
                         .size(36.dp)

@@ -9,6 +9,7 @@ import android.provider.CallLog
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -16,13 +17,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Newspaper
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -32,250 +34,149 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import coil.compose.AsyncImage
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
-import com.google.android.gms.tasks.CancellationTokenSource
+import androidx.core.graphics.drawable.toBitmap
+import android.content.Context
 import com.soc.launcher.*
 import android.provider.Settings
 import com.soc.launcher.data.model.*
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.PriorityHigh
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size as ComposeSize
+import androidx.compose.ui.graphics.nativeCanvas
 import java.util.UUID
-import com.soc.launcher.util.NewsParser
+import android.provider.MediaStore
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import android.util.Size
+import androidx.core.content.FileProvider
+import java.io.File
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.*
+import android.widget.Toast
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.ThumbUp
 
+/**
+ * PastScreen displays historical usage data and recent media.
+ *
+ * Visual Consistency:
+ * - Root background alpha: 0.85
+ * - Section containers: Color.White.copy(alpha = 0.03f)
+ *
+ * Usage Logic:
+ * - Weekly Graph: Displays true Screen-On Time using UsageEvents (SCREEN_INTERACTIVE).
+ * - App Activity List: Displays total running time (foreground + background).
+ * - Density: High-density app list with 28dp icons and 6dp vertical padding.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun PastScreen(
-    newsAppPackage: String,
     apps: List<AppInfo>
 ) {
     val context = LocalContext.current
 
-    val callPermission = Manifest.permission.READ_CALL_LOG
-    val smsPermission = Manifest.permission.READ_SMS
+    val imagesPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        Manifest.permission.READ_MEDIA_IMAGES
+    } else {
+        Manifest.permission.READ_EXTERNAL_STORAGE
+    }
 
-    var hasCallPermission by remember { mutableStateOf(context.checkSelfPermission(callPermission) == PackageManager.PERMISSION_GRANTED) }
-    var hasSmsPermission by remember { mutableStateOf(context.checkSelfPermission(smsPermission) == PackageManager.PERMISSION_GRANTED) }
-    var hasWriteCallPermission by remember { mutableStateOf(context.checkSelfPermission("android.permission.WRITE_CALL_LOG") == PackageManager.PERMISSION_GRANTED) }
-    var hasWriteSmsPermission by remember { mutableStateOf(context.checkSelfPermission("android.permission.WRITE_SMS") == PackageManager.PERMISSION_GRANTED) }
+    var hasImagesPermission by remember { mutableStateOf(context.checkSelfPermission(imagesPermission) == PackageManager.PERMISSION_GRANTED) }
 
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        hasCallPermission = permissions[callPermission] ?: hasCallPermission
-        hasSmsPermission = permissions[smsPermission] ?: hasSmsPermission
-        hasWriteCallPermission = permissions["android.permission.WRITE_CALL_LOG"] ?: hasWriteCallPermission
-        hasWriteSmsPermission = permissions["android.permission.WRITE_SMS"] ?: hasWriteSmsPermission
+        hasImagesPermission = permissions[imagesPermission] ?: hasImagesPermission
     }
-
-    var missedCalls by remember { mutableStateOf<List<MissedCallInfo>>(emptyList()) }
 
     val sharedPrefs = remember { context.getSharedPreferences("launcher_prefs", android.content.Context.MODE_PRIVATE) }
 
-    var parkingLat by remember { mutableStateOf(sharedPrefs.getFloat("parking_lat", 0f)) }
-    var parkingLng by remember { mutableStateOf(sharedPrefs.getFloat("parking_lng", 0f)) }
-    var parkingTime by remember { mutableStateOf(sharedPrefs.getLong("parking_time", 0L)) }
-
     val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner, hasCallPermission) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                if (hasCallPermission) missedCalls = getMissedCalls(context)
+    
+    // MediaStore Images Logic
+    var recentImages by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var excludedImages by remember { 
+        mutableStateOf(sharedPrefs.getStringSet("excluded_images", emptySet()) ?: emptySet()) 
+    }
+
+    LaunchedEffect(hasImagesPermission, excludedImages, lifecycleOwner) {
+        if (hasImagesPermission) {
+            val images = withContext(Dispatchers.IO) {
+                getRecentCameraImages(context, excludedImages)
             }
+            recentImages = images
         }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        if (hasCallPermission) missedCalls = getMissedCalls(context)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     val coroutineScope = rememberCoroutineScope()
 
-    val newsArticles by produceState<List<NewsArticle>>(initialValue = emptyList()) {
-        value = withContext(Dispatchers.IO) {
-            try {
-                val rssUrl = "https://feedx.net/rss/ap.xml"
-                withContext(Dispatchers.IO) {
-                    NewsParser.parseRss(URL(rssUrl).openStream())
+    val currentExcludedImages by rememberUpdatedState(excludedImages)
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                if (hasImagesPermission) {
+                    coroutineScope.launch(Dispatchers.IO) {
+                         val images = getRecentCameraImages(context, currentExcludedImages)
+                         withContext(Dispatchers.Main) { recentImages = images }
+                    }
                 }
-            } catch (e: Exception) {
-                Log.e("ChronosLauncher", "News fetch failed", e)
-                emptyList()
             }
         }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     var appUsage by remember { mutableStateOf<List<AppUsageInfo>>(emptyList()) }
+    var weeklyUsage by remember { mutableStateOf<List<Long>>(emptyList()) }
     var hasUsagePermission by remember { mutableStateOf(hasUsageStatsPermission(context)) }
 
     LaunchedEffect(hasUsagePermission, apps) {
         if (hasUsagePermission) {
-            appUsage = getDailyAppUsage(context, apps).take(5)
+            appUsage = getDailyAppUsage(context, apps).take(20)
+            weeklyUsage = getWeeklyUsageData(context)
         }
     }
+
+    val scrollState = rememberScrollState()
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF050A10).copy(alpha = 0.85f))
-            .padding(horizontal = 16.dp),
+            .verticalScroll(scrollState),
     ) {
+        // App Usage Section (Darker Background)
         Column(
             modifier = Modifier
-                .weight(1f)
-                .padding(top = 32.dp, bottom = 16.dp)
+                .fillMaxWidth()
+                .background(Color.Black.copy(alpha = 0.15f))
+                .padding(start = 16.dp, end = 16.dp, top = 32.dp, bottom = 16.dp)
         ) {
-            if (missedCalls.isNotEmpty()) {
-                Section(
-                    title = "Missed Calls",
-                    items = missedCalls.map { if (it.count > 1) "${it.name} (${it.count})" else it.name },
-                    onItemClick = { index ->
-                        if (missedCalls.isNotEmpty()) {
-                            val call = missedCalls[index]
-                            val intent = Intent(Intent.ACTION_VIEW, CallLog.Calls.CONTENT_URI)
-                            context.startActivity(intent)
-
-                            coroutineScope.launch(Dispatchers.IO) {
-                                try {
-                                    val values = android.content.ContentValues()
-                                    values.put(CallLog.Calls.IS_READ, 1)
-                                    values.put(CallLog.Calls.NEW, 0)
-                                    context.contentResolver.update(
-                                        CallLog.Calls.CONTENT_URI,
-                                        values,
-                                        "${CallLog.Calls.NUMBER} = ? AND ${CallLog.Calls.IS_READ} = 0",
-                                        arrayOf(call.number)
-                                    )
-                                    val updated = getMissedCalls(context)
-                                    withContext(Dispatchers.Main) { missedCalls = updated }
-                                } catch (e: Exception) {
-                                    Log.e("ChronosLauncher", "Error marking call as read", e)
-                                }
-                            }
-                        }
-                    },
-                    onPermissionClick = if (!hasCallPermission || !hasWriteCallPermission) { { launcher.launch(arrayOf(callPermission, "android.permission.WRITE_CALL_LOG")) } } else null,
-                    onClearClick = {
-                        coroutineScope.launch(Dispatchers.IO) {
-                            try {
-                                val values = android.content.ContentValues()
-                                values.put(CallLog.Calls.IS_READ, 1)
-                                values.put(CallLog.Calls.NEW, 0)
-                                context.contentResolver.update(
-                                    CallLog.Calls.CONTENT_URI,
-                                    values,
-                                    "${CallLog.Calls.TYPE} = ${CallLog.Calls.MISSED_TYPE} AND ${CallLog.Calls.IS_READ} = 0",
-                                    null
-                                )
-                                val updated = getMissedCalls(context)
-                                withContext(Dispatchers.Main) { missedCalls = updated }
-                            } catch (e: Exception) {
-                                Log.e("ChronosLauncher", "Error clearing missed calls", e)
-                            }
-                        }
-                    },
-                    maxItems = 3
-                )
-                Spacer(Modifier.height(24.dp))
-            }
-
-            // Parking Section
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(modifier = Modifier.weight(1f).clickable {
-                    if (parkingTime > 0) {
-                        val uri = "geo:$parkingLat,$parkingLng?q=$parkingLat,$parkingLng(Parking Spot)"
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri))
-                        context.startActivity(intent)
-                    } else {
-                        // Mark current location
-                        if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-                            val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
-                            try {
-                                val cts = CancellationTokenSource()
-                                fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, cts.token)
-                                    .addOnSuccessListener { location ->
-                                        if (location != null) {
-                                            val now = System.currentTimeMillis()
-                                            parkingLat = location.latitude.toFloat()
-                                            parkingLng = location.longitude.toFloat()
-                                            parkingTime = now
-                                            sharedPrefs.edit()
-                                                .putFloat("parking_lat", parkingLat)
-                                                .putFloat("parking_lng", parkingLng)
-                                                .putLong("parking_time", parkingTime)
-                                                .apply()
-                                        }
-                                    }
-                            } catch (e: SecurityException) {
-                                Log.e("ChronosLauncher", "Location permission denied", e)
-                            }
-                        } else {
-                            launcher.launch(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION))
-                        }
-                    }
-                }) {
-                    if (parkingTime > 0) {
-                        val date = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(parkingTime))
-                        Text(
-                            "You Parked Here at $date".uppercase(),
-                            color = Color(0xFF4A90E2),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Black,
-                            letterSpacing = 1.sp
-                        )
-                    } else {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.DirectionsCar,
-                                contentDescription = null,
-                                tint = Color(0xFF4A90E2),
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                "Mark Your Parking Spot".uppercase(),
-                                color = Color(0xFF4A90E2),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Black,
-                                letterSpacing = 1.sp
-                            )
-                        }
-                    }
-                }
-                if (parkingTime > 0) {
-                    IconButton(onClick = {
-                        parkingTime = 0L
-                        sharedPrefs.edit().remove("parking_time").apply()
-                    }, modifier = Modifier.size(20.dp)) {
-                        Icon(Icons.Default.Close, contentDescription = "Clear", tint = Color(0xFF4A90E2).copy(alpha = 0.6f), modifier = Modifier.size(14.dp))
-                    }
-                }
-            }
-            Spacer(Modifier.height(24.dp))
-
-            AppUsageSection(
-                modifier = Modifier.weight(1f),
-                appUsage = appUsage,
+            AppUsageHeader(
                 hasPermission = hasUsagePermission,
                 onRequestPermission = {
                     val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
@@ -283,67 +184,166 @@ fun PastScreen(
                     context.startActivity(intent)
                 }
             )
+
+            if (!hasUsagePermission) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(150.dp)
+                        .clickable {
+                            val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
+                            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                            context.startActivity(intent)
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "Grant Usage Stats Permission to see your phone usage.".uppercase(),
+                        color = Color.White.copy(alpha = 0.4f),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.padding(16.dp)
+                    )
+                }
+            } else if (appUsage.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(150.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "No usage data available yet.".uppercase(),
+                        color = Color.White.copy(alpha = 0.4f),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            } else {
+                Spacer(Modifier.height(16.dp))
+                // App list with fixed height and internal scrolling to save space
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 200.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    appUsage.forEach { usage ->
+                        AppUsageItem(usage)
+                    }
+                }
+            }
         }
 
-        Column(
-            modifier = Modifier
-                .weight(1.2f)
-                .padding(bottom = 32.dp)
-        ) {
-            Row(
+        // Screen Time Section (0.03 Background)
+        if (hasUsagePermission && weeklyUsage.isNotEmpty()) {
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .background(Color.White.copy(alpha = 0.03f))
+                    .padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 24.dp)
             ) {
                 Text(
-                    "Top News".uppercase(),
+                    "Screen Time".uppercase(),
+                    color = Color(0xFF4A90E2),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Black,
+                    letterSpacing = 1.sp,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+                UsageGraph(weeklyUsage)
+            }
+        }
+
+        // Recent Photos Section (Darker Background)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color.Black.copy(alpha = 0.15f))
+                .padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 32.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp)
+                    .clickable {
+                        val intent = Intent(Intent.ACTION_VIEW)
+                        intent.type = "image/*"
+                        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        try {
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            Log.e("PastScreen", "Failed to open gallery", e)
+                        }
+                    }
+            ) {
+                Text(
+                    "Recent Photos (${recentImages.size})".uppercase(),
                     color = Color(0xFF4A90E2),
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Black,
                     letterSpacing = 1.sp
                 )
-                Text(
-                    "OPEN APP",
-                    color = Color(0xFF4A90E2),
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.clickable {
-                        val intent = context.packageManager.getLaunchIntentForPackage(newsAppPackage)
-                        if (intent != null) {
-                            try {
-                                context.startActivity(intent)
-                            } catch (e: Exception) {}
-                        }
-                    }
-                )
             }
 
-            if (newsArticles.isEmpty()) {
+            if (!hasImagesPermission) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f),
+                        .height(100.dp)
+                        .clickable { launcher.launch(arrayOf(imagesPermission)) },
                     contentAlignment = Alignment.Center
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(24.dp),
-                            color = Color.White.copy(alpha = 0.3f),
-                            strokeWidth = 2.dp
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        Text("Fetching latest news...", color = Color.White.copy(alpha = 0.4f), fontSize = 12.sp)
-                    }
+                    Text(
+                        "Grant Permission to see recent photos".uppercase(),
+                        color = Color.White.copy(alpha = 0.4f),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            } else if (recentImages.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(100.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "No photos found".uppercase(),
+                        color = Color.White.copy(alpha = 0.2f),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             } else {
-                LazyColumn(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    items(newsArticles) { article ->
-                        NewsCard(article)
+                    recentImages.chunked(3).forEach { rowImages ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            rowImages.forEach { uri ->
+                                Box(modifier = Modifier.weight(1f)) {
+                                    RecentImageItem(
+                                        uri = uri,
+                                        onRemove = {
+                                            val newExcluded = excludedImages.toMutableSet()
+                                            newExcluded.add(uri.toString())
+                                            excludedImages = newExcluded
+                                            sharedPrefs.edit().putStringSet("excluded_images", newExcluded).apply()
+                                        }
+                                    )
+                                }
+                            }
+                            repeat(3 - rowImages.size) {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
+                        }
                     }
                 }
             }
@@ -352,67 +352,245 @@ fun PastScreen(
 }
 
 @Composable
-fun NewsCard(article: NewsArticle) {
+fun AppUsageHeader(
+    hasPermission: Boolean,
+    onRequestPermission: () -> Unit
+) {
     val context = LocalContext.current
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable {
+                val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
+                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                context.startActivity(intent)
+            }
+    ) {
+        Text(
+            "App Usage".uppercase(),
+            color = Color(0xFF4A90E2),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Black,
+            letterSpacing = 1.sp
+        )
+        Spacer(Modifier.width(8.dp))
+        Icon(
+            Icons.Default.Info,
+            contentDescription = "Info",
+            tint = Color(0xFF4A90E2).copy(alpha = 0.6f),
+            modifier = Modifier
+                .size(14.dp)
+                .clickable {
+                    Toast
+                        .makeText(
+                            context,
+                            "App Activity times are individually based on total running time, not just screen time.",
+                            Toast.LENGTH_LONG
+                        )
+                        .show()
+                }
+        )
+    }
+}
+
+@Composable
+fun AppUsageItem(usage: AppUsageInfo) {
+    val context = LocalContext.current
+    val hours = usage.totalTimeInForeground / (1000 * 60 * 60)
+    val minutes = (usage.totalTimeInForeground / (1000 * 60)) % 60
+    val timeStr = when {
+        hours > 0 -> "${hours}h ${minutes}m"
+        else -> "${minutes}m"
+    }
+
+    val icon = remember(usage.packageName) {
+        try {
+            context.packageManager.getApplicationIcon(usage.packageName).toBitmap().asImageBitmap()
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable {
-                try {
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(article.url))
-                    intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                val intent = context.packageManager.getLaunchIntentForPackage(usage.packageName)
+                if (intent != null) {
                     context.startActivity(intent)
-                } catch (e: Exception) {
-                    Log.e("ChronosLauncher", "Could not open news link", e)
                 }
             }
-            .padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        if (article.urlToImage != null) {
-            AsyncImage(
-                model = article.urlToImage,
-                contentDescription = null,
-                modifier = Modifier
-                    .size(72.dp)
-                    .clip(RoundedCornerShape(12.dp)),
-                contentScale = ContentScale.Crop
-            )
-        } else {
-            Box(
-                modifier = Modifier
-                    .size(72.dp)
-                    .background(Color.White.copy(alpha = 0.1f), RoundedCornerShape(12.dp)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(Icons.Default.Newspaper, contentDescription = null, tint = Color.White.copy(alpha = 0.2f))
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (icon != null) {
+                Image(
+                    bitmap = icon,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                )
+                Spacer(Modifier.width(12.dp))
             }
-        }
-
-        Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = article.title,
+                text = usage.name,
                 color = Color.White,
                 fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                lineHeight = 18.sp
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
-            if (article.source != null) {
-                Text(
-                    text = article.source.uppercase(),
-                    color = Color.White.copy(alpha = 0.85f),
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Black,
-                    modifier = Modifier.padding(top = 4.dp),
-                    letterSpacing = 0.5.sp
-                )
+        }
+        Text(
+            text = timeStr,
+            color = Color.White.copy(alpha = 0.6f),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun RecentImageItem(uri: Uri, onRemove: () -> Unit) {
+    val context = LocalContext.current
+    var showMenu by remember { mutableStateOf(false) }
+    
+    val thumbnail by produceState<android.graphics.Bitmap?>(initialValue = null, key1 = uri) {
+        value = withContext(Dispatchers.IO) {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    context.contentResolver.loadThumbnail(uri, Size(300, 300), null)
+                } else {
+                    MediaStore.Images.Thumbnails.getThumbnail(
+                        context.contentResolver,
+                        uri.lastPathSegment?.toLong() ?: 0L,
+                        MediaStore.Images.Thumbnails.MINI_KIND,
+                        null
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e("PastScreen", "Failed to load thumbnail", e)
+                null
             }
         }
     }
+
+    Box(
+        modifier = Modifier
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha = 0.05f))
+            .combinedClickable(
+                onClick = {
+                    val intent = Intent(Intent.ACTION_VIEW)
+                    intent.setDataAndType(uri, "image/*")
+                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    context.startActivity(intent)
+                },
+                onLongClick = { showMenu = true }
+            )
+    ) {
+        if (thumbnail != null) {
+            Image(
+                bitmap = thumbnail!!.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        }
+
+        DropdownMenu(
+            expanded = showMenu,
+            onDismissRequest = { showMenu = false },
+            modifier = Modifier.background(Color(0xFF1A1A1A))
+        ) {
+            DropdownMenuItem(
+                text = { Text("Share", color = Color.White) },
+                leadingIcon = { Icon(Icons.Default.Share, contentDescription = null, tint = Color.White) },
+                onClick = {
+                    showMenu = false
+                    val intent = Intent(Intent.ACTION_SEND)
+                    intent.type = "image/*"
+                    intent.putExtra(Intent.EXTRA_STREAM, uri)
+                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    context.startActivity(Intent.createChooser(intent, "Share Image"))
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("Remove", color = Color.White) },
+                leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = Color.White) },
+                onClick = {
+                    showMenu = false
+                    onRemove()
+                }
+            )
+        }
+    }
 }
+
+fun getRecentCameraImages(context: Context, excludedUris: Set<String>): List<Uri> {
+    val images = mutableListOf<Uri>()
+    val projection = arrayOf(
+        MediaStore.Images.Media._ID,
+        MediaStore.Images.Media.DATE_TAKEN,
+        MediaStore.Images.Media.DATA
+    )
+    
+    val selection = "${MediaStore.Images.Media.MIME_TYPE} LIKE ? AND ${MediaStore.Images.Media.DATA} LIKE ?"
+    val selectionArgs = arrayOf("image/%", "%/DCIM/Camera/%")
+    val sortOrder = "${MediaStore.Images.Media.DATE_TAKEN} DESC"
+
+    context.contentResolver.query(
+        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+        projection,
+        selection,
+        selectionArgs,
+        sortOrder
+    )?.use { cursor ->
+        val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+        while (cursor.moveToNext() && images.size < 6) {
+            val id = cursor.getLong(idColumn)
+            val contentUri = Uri.withAppendedPath(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id.toString())
+            if (!excludedUris.contains(contentUri.toString())) {
+                images.add(contentUri)
+            }
+        }
+    }
+    
+    // Fallback if no Camera images found
+    if (images.isEmpty()) {
+        val fallbackSelection = "${MediaStore.Images.Media.MIME_TYPE} LIKE ?"
+        val fallbackArgs = arrayOf("image/%")
+        context.contentResolver.query(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            projection,
+            fallbackSelection,
+            fallbackArgs,
+            sortOrder
+        )?.use { cursor ->
+            val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+            while (cursor.moveToNext() && images.size < 6) {
+                val id = cursor.getLong(idColumn)
+                val contentUri = Uri.withAppendedPath(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id.toString())
+                if (!excludedUris.contains(contentUri.toString())) {
+                    images.add(contentUri)
+                }
+            }
+        }
+    }
+    
+    return images
+}
+
+
+
 
 @Composable
 fun Section(
@@ -437,8 +615,8 @@ fun Section(
                 letterSpacing = 1.sp
             )
             if (onClearClick != null && items.isNotEmpty()) {
-                IconButton(onClick = onClearClick, modifier = Modifier.size(20.dp)) {
-                    Icon(Icons.Default.Close, contentDescription = "Clear", tint = Color(0xFF4A90E2).copy(alpha = 0.6f), modifier = Modifier.size(14.dp))
+                IconButton(onClick = onClearClick, modifier = Modifier.size(40.dp)) {
+                    Icon(Icons.Default.Clear, contentDescription = "Clear", tint = Color(0xFF4A90E2).copy(alpha = 0.6f), modifier = Modifier.size(18.dp))
                 }
             }
         }
@@ -485,117 +663,114 @@ fun Section(
 }
 
 @Composable
-fun AppUsageSection(
-    modifier: Modifier = Modifier,
-    appUsage: List<AppUsageInfo>,
-    hasPermission: Boolean,
-    onRequestPermission: () -> Unit
-) {
-    val context = LocalContext.current
-    Column(modifier = modifier.fillMaxWidth()) {
-        Text(
-            "Phone Usage Today".uppercase(),
-            color = Color(0xFF4A90E2),
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Black,
-            letterSpacing = 1.sp
-        )
+fun UsageGraph(weeklyUsage: List<Long>) {
+    // Increased to 12-hour scale
+    val maxUsageMillis = 12L * 60 * 60 * 1000f
+    val days = listOf("SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT")
+    
+    // Reduced height from 120.dp to 100.dp
+    Box(modifier = Modifier
+        .fillMaxWidth()
+        .height(100.dp)
+    ) {
+        val hourLabels = listOf(3, 6, 9, 12)
+        val todayIndex = remember {
+            val cal = Calendar.getInstance()
+            (cal.get(Calendar.DAY_OF_WEEK) - Calendar.SUNDAY + 7) % 7
+        }
 
-        Spacer(Modifier.height(12.dp))
+        // Grid Lines, Hours, and Bars drawn on Canvas for perfect alignment
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val graphBottom = size.height - 30.dp.toPx()
+            val graphTop = 10.dp.toPx()
+            val graphHeight = graphBottom - graphTop
 
-        if (!hasPermission) {
+            // Draw Grid Lines
+            val textPaint = android.graphics.Paint().apply {
+                color = android.graphics.Color.WHITE
+                alpha = (255 * 0.3f).toInt()
+                textSize = 8.sp.toPx()
+            }
+
+            hourLabels.forEach { hour ->
+                val hMillis = hour.toLong() * 60 * 60 * 1000f
+                val y = graphBottom - (hMillis / maxUsageMillis * graphHeight)
+                
+                drawLine(
+                    color = Color.White.copy(alpha = 0.1f),
+                    start = Offset(0f, y),
+                    end = Offset(size.width, y),
+                    strokeWidth = 0.5.dp.toPx()
+                )
+                
+                drawContext.canvas.nativeCanvas.drawText("${hour}h", 0f, y - 4.dp.toPx(), textPaint)
+            }
+
+            // Draw Bars
+            val barWidth = 16.dp.toPx()
+            val spacing = size.width / days.size
+            
+            days.forEachIndexed { index, _ ->
+                val usage = weeklyUsage.getOrNull(index) ?: 0L
+                if (usage > 0) {
+                    val barHeight = (usage.toFloat() / maxUsageMillis * graphHeight).coerceAtMost(graphHeight).coerceAtLeast(1.dp.toPx())
+                    val isToday = index == todayIndex
+                    
+                    val x = index * spacing + (spacing / 2) - (barWidth / 2)
+                    
+                    // Main Bar
+                    drawRoundRect(
+                        color = if (isToday) Color(0xFF4A90E2).copy(alpha = 0.4f) else Color.White.copy(alpha = 0.3f),
+                        topLeft = Offset(x, graphBottom - barHeight),
+                        size = ComposeSize(barWidth, barHeight),
+                        cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
+                    )
+                    
+                    // Solid bottom for the current day, or consistent baseline for others
+                    val squareHeight = 2.dp.toPx().coerceAtMost(barHeight)
+                    drawRect(
+                        color = if (isToday) Color(0xFF4A90E2) else Color.White.copy(alpha = 0.3f),
+                        topLeft = Offset(x, graphBottom - squareHeight),
+                        size = ComposeSize(barWidth, squareHeight)
+                    )
+                }
+            }
+        }
+
+        // X-axis labels and baseline
+        Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f)
-                    .clickable { onRequestPermission() },
-                contentAlignment = Alignment.Center
+                    .height(1.dp)
+                    .background(Color.White.copy(alpha = 0.2f))
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth().height(29.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
             ) {
-                Text(
-                    "Grant Usage Stats Permission to see your phone usage.".uppercase(),
-                    color = Color.White.copy(alpha = 0.4f),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    modifier = Modifier.padding(16.dp)
-                )
-            }
-        } else if (appUsage.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    "No usage data available yet today.".uppercase(),
-                    color = Color.White.copy(alpha = 0.4f),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-        } else {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .verticalScroll(rememberScrollState())
-            ) {
-                appUsage.forEach { usage ->
-                    val hours = usage.totalTimeInForeground / (1000 * 60 * 60)
-                    val minutes = (usage.totalTimeInForeground / (1000 * 60)) % 60
-                    val timeStr = when {
-                        hours > 0 -> "${hours}h ${minutes}m"
-                        else -> "${minutes}m"
-                    }
-
-                    val icon = remember(usage.packageName) {
-                        try {
-                            context.packageManager.getApplicationIcon(usage.packageName)
-                        } catch (e: Exception) {
-                            null
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                days.forEachIndexed { index, day ->
+                    val isToday = index == todayIndex
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.weight(1f)
                     ) {
-                        Row(
-                            modifier = Modifier.weight(1f),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (icon != null) {
-                                AsyncImage(
-                                    model = icon,
-                                    contentDescription = null,
-                                    modifier = Modifier
-                                        .size(24.dp)
-                                        .clip(RoundedCornerShape(6.dp))
-                                )
-                                Spacer(Modifier.width(12.dp))
-                            }
-                            Text(
-                                text = usage.name,
-                                color = Color.White,
-                                fontSize = 15.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
+                        Box(
+                            modifier = Modifier
+                                .width(1.dp)
+                                .height(4.dp)
+                                .background(if (isToday) Color(0xFF4A90E2) else Color.White.copy(alpha = 0.2f))
+                        )
+                        Spacer(Modifier.height(4.dp))
                         Text(
-                            text = timeStr,
-                            color = Color.White.copy(alpha = 0.6f),
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium
+                            text = day,
+                            color = if (isToday) Color(0xFF4A90E2) else Color.White.copy(alpha = 0.4f),
+                            fontSize = 9.sp,
+                            fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal
                         )
                     }
                 }
-
-                /* Removed TOTAL SCREEN TIME footer as it moved to PresentScreen */
             }
         }
     }

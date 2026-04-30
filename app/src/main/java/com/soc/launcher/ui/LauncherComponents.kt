@@ -11,10 +11,18 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import com.soc.launcher.MediaNotificationListener
+import com.soc.launcher.data.model.AppInfo
+import com.soc.launcher.isNotificationServiceEnabled
+import com.soc.launcher.data.model.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -35,10 +43,6 @@ import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import coil.compose.AsyncImage
-import com.soc.launcher.MediaNotificationListener
-import com.soc.launcher.data.model.AppInfo
-import com.soc.launcher.isNotificationServiceEnabled
 import android.net.Uri
 import android.content.Context
 import android.content.pm.PackageManager
@@ -116,7 +120,7 @@ fun MediaControlSection() {
                 horizontalArrangement = Arrangement.spacedBy(28.dp)
             ) {
                 IconButton(onClick = { MediaNotificationListener.sendCommand("previous") }, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Default.SkipPrevious, contentDescription = "Previous", tint = Color.White)
+                    Text("«", color = Color.White, fontSize = 24.sp)
                 }
                 IconButton(
                     onClick = {
@@ -125,15 +129,19 @@ fun MediaControlSection() {
                     },
                     modifier = Modifier.size(48.dp)
                 ) {
-                    Icon(
-                        if (mediaInfo.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (mediaInfo.isPlaying) "Pause" else "Play",
-                        tint = Color.White,
-                        modifier = Modifier.size(40.dp)
-                    )
+                    if (mediaInfo.isPlaying) {
+                        Text("‖", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    } else {
+                        Icon(
+                            Icons.Default.PlayArrow,
+                            contentDescription = "Play",
+                            tint = Color.White,
+                            modifier = Modifier.size(40.dp)
+                        )
+                    }
                 }
                 IconButton(onClick = { MediaNotificationListener.sendCommand("next") }, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Default.SkipNext, contentDescription = "Next", tint = Color.White)
+                    Text("»", color = Color.White, fontSize = 24.sp)
                 }
             }
         }
@@ -239,7 +247,7 @@ fun SearchBar(aiPkg: String) {
                 Log.e("ChronosLauncher", "Failed to launch any assistant", e)
             }
         }) {
-            Icon(Icons.Default.AutoAwesome, contentDescription = "AI", tint = Color(0xFF4A90E2))
+            Icon(Icons.Default.Star, contentDescription = "AI", tint = Color(0xFF4A90E2))
         }
     }
 }
@@ -324,14 +332,20 @@ fun Section(
                     } else if (itemIcons != null && index < itemIcons.size) {
                         val iconUri = itemIcons[index]
                         if (iconUri != null) {
-                            AsyncImage(
-                                model = iconUri,
-                                contentDescription = null,
+                            Box(
                                 modifier = Modifier
                                     .size(32.dp)
-                                    .clip(RoundedCornerShape(16.dp)),
-                                contentScale = ContentScale.Crop
-                            )
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(Color.White.copy(alpha = 0.05f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = item.firstOrNull()?.toString()?.uppercase() ?: "?",
+                                    color = Color.White,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                         } else if (item != "No recent missed calls" && item != "No recent messages") {
                             Box(
                                 modifier = Modifier
@@ -369,10 +383,10 @@ fun AppIcon(app: AppInfo, modifier: Modifier = Modifier, showLabel: Boolean = tr
     val context = LocalContext.current
     val icon = remember(app.packageName) {
         try {
-            context.packageManager.getApplicationIcon(app.packageName)
+            context.packageManager.getApplicationIcon(app.packageName).toBitmap().asImageBitmap()
         } catch (e: Exception) {
             Log.e("TemporalLauncher", "Error loading icon for ${app.packageName}", e)
-            context.packageManager.defaultActivityIcon
+            context.packageManager.defaultActivityIcon.toBitmap().asImageBitmap()
         }
     }
 
@@ -394,7 +408,7 @@ fun AppIcon(app: AppInfo, modifier: Modifier = Modifier, showLabel: Boolean = tr
             contentAlignment = Alignment.Center
         ) {
             Image(
-                bitmap = icon.toBitmap().asImageBitmap(),
+                bitmap = icon,
                 contentDescription = app.name,
                 modifier = Modifier.fillMaxSize(0.6f)
             )

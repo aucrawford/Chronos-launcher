@@ -2,8 +2,6 @@ package com.soc.launcher
 
 import com.soc.launcher.data.model.*
 import com.soc.launcher.util.AppCategoryHelper
-import com.soc.launcher.util.NewsParser
-import com.soc.launcher.util.SpamDetector
 import com.soc.launcher.ui.*
 import android.Manifest
 import android.app.ActivityManager
@@ -14,30 +12,23 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.SharedPreferences
 import android.content.pm.PackageManager
-import android.content.pm.ResolveInfo
 import android.graphics.Bitmap
-import android.graphics.drawable.BitmapDrawable
-import android.graphics.drawable.Drawable
-import android.net.Uri
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
-import android.os.Handler
-import android.os.Looper
 import android.os.Process
 import android.os.StatFs
 import android.provider.CallLog
 import android.provider.ContactsContract
-import android.provider.Settings
-import android.provider.Telephony
 import android.util.Log
+import android.app.usage.UsageEvents
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.compose.animation.*
 import androidx.core.app.NotificationManagerCompat
-import android.content.ComponentName
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -46,38 +37,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
-import kotlinx.coroutines.launch
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material.icons.filled.Newspaper
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -85,48 +50,46 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.TextUnit
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.core.app.ActivityCompat
 import androidx.core.graphics.drawable.toBitmap
 import androidx.core.view.WindowCompat
-import coil.compose.AsyncImage
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
-import retrofit2.Retrofit
-import retrofit2.converter.gson.GsonConverterFactory
-import retrofit2.http.GET
-import retrofit2.http.Query
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import java.io.File
+import org.json.JSONObject
 import java.net.URL
-import javax.xml.parsers.DocumentBuilderFactory
-import org.w3c.dom.Element
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Shadow
-import androidx.compose.material.icons.filled.PriorityHigh
-import androidx.compose.ui.text.TextStyle
-import com.google.gson.reflect.TypeToken
-import com.google.gson.Gson
 import java.util.*
 
-interface WeatherApi {
-    @GET("weather")
+// Simplified Weather API using built-in HttpURLConnection and org.json
+object WeatherService {
     suspend fun getCurrentWeather(
-        @Query("lat") lat: Double,
-        @Query("lon") lon: Double,
-        @Query("units") units: String,
-        @Query("appid") apiKey: String
-    ): WeatherResponse
+        lat: Double,
+        lon: Double,
+        units: String,
+        apiKey: String
+    ): WeatherResponse = withContext(Dispatchers.IO) {
+        val urlString = "https://api.openweathermap.org/data/2.5/weather?lat=$lat&lon=$lon&units=$units&appid=$apiKey"
+        val response = URL(urlString).readText()
+        val json = JSONObject(response)
+        
+        val mainJson = json.getJSONObject("main")
+        val weatherArray = json.getJSONArray("weather")
+        val weatherObj = weatherArray.getJSONObject(0)
+        
+        WeatherResponse(
+            main = Main(
+                temp = mainJson.getDouble("temp").toFloat(),
+                humidity = mainJson.getInt("humidity")
+            ),
+            weather = listOf(
+                Weather(
+                    description = weatherObj.getString("description"),
+                    icon = weatherObj.getString("icon")
+                )
+            ),
+            name = json.getString("name")
+        )
+    }
 }
+
 
 class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalFoundationApi::class)
@@ -203,7 +166,7 @@ fun TemporalLauncher() {
     } else {
         Manifest.permission.READ_EXTERNAL_STORAGE
     }
-    
+
     var hasWallpaperPermission by remember {
         mutableStateOf(context.checkSelfPermission(wallpaperPermission) == PackageManager.PERMISSION_GRANTED)
     }
@@ -224,7 +187,35 @@ fun TemporalLauncher() {
         if (hasWallpaperPermission) {
             withContext(Dispatchers.IO) {
                 try {
-                    value = wallpaperManager.drawable?.toBitmap()
+                    val drawable = wallpaperManager.drawable
+                    if (drawable != null) {
+                        val metrics = context.resources.displayMetrics
+                        val screenWidth = metrics.widthPixels
+                        val screenHeight = metrics.heightPixels
+                        
+                        val intrinsicWidth = drawable.intrinsicWidth
+                        val intrinsicHeight = drawable.intrinsicHeight
+
+                        val bitmap = if (intrinsicWidth > 0 && intrinsicHeight > 0) {
+                            // Calculate scale to fill the screen while preserving aspect ratio
+                            val scale = Math.max(
+                                screenWidth.toFloat() / intrinsicWidth,
+                                screenHeight.toFloat() / intrinsicHeight
+                            )
+                            val targetWidth = (intrinsicWidth * scale).toInt()
+                            val targetHeight = (intrinsicHeight * scale).toInt()
+                            
+                            // Use RGB_565 to save 50% RAM compared to ARGB_8888.
+                            // Wallpapers generally don't need alpha transparency.
+                            drawable.toBitmap(targetWidth, targetHeight, Bitmap.Config.RGB_565)
+                        } else {
+                            // Fallback if intrinsic dimensions are not available
+                            drawable.toBitmap(screenWidth, screenHeight, Bitmap.Config.RGB_565)
+                        }
+                        value = bitmap
+                    } else {
+                        value = null
+                    }
                 } catch (e: SecurityException) {
                     Log.e("TemporalLauncher", "SecurityException reading wallpaper", e)
                 } catch (e: Exception) {
@@ -234,7 +225,7 @@ fun TemporalLauncher() {
         }
     }
     
-    val apps by produceState<List<AppInfo>>(initialValue = emptyList(), refreshAppsCounter) {
+    val apps by produceState(initialValue = emptyList<AppInfo>(), refreshAppsCounter) {
         withContext(Dispatchers.IO) {
             val result = getInstalledApps(context)
             Log.d("TemporalLauncher", "Loaded ${result.size} apps (refresh: $refreshAppsCounter)")
@@ -243,9 +234,7 @@ fun TemporalLauncher() {
     }
 
     var aiAppPackage by remember { mutableStateOf(sharedPrefs.getString("ai_pkg", "com.google.android.apps.bard") ?: "com.google.android.apps.bard") }
-    var newsAppPackage by remember { mutableStateOf(sharedPrefs.getString("news_pkg", "com.google.android.apps.magazines") ?: "com.google.android.apps.magazines") }
     var weatherApiKey by remember { mutableStateOf(sharedPrefs.getString("weather_api_key", "") ?: "") }
-    var use24HourFormat by remember { mutableStateOf(sharedPrefs.getBoolean("use_24h", false)) }
 
     val pagerState = rememberPagerState(initialPage = 1, pageCount = { 3 })
     var showSettings by remember { mutableStateOf(false) }
@@ -288,14 +277,12 @@ fun TemporalLauncher() {
             ) { page ->
                 when (page) {
                     0 -> PastScreen(
-                        newsAppPackage = newsAppPackage,
                         apps = apps
                     )
                     1 -> PresentScreen(
                         aiAppPackage = aiAppPackage,
                         apps = apps,
-                        weatherApiKey = weatherApiKey,
-                        use24HourFormat = use24HourFormat
+                        weatherApiKey = weatherApiKey
                     )
                     2 -> FutureScreen(apps)
                 }
@@ -315,11 +302,6 @@ fun TemporalLauncher() {
                 onApiKeyChanged = { key ->
                     weatherApiKey = key
                     sharedPrefs.edit().putString("weather_api_key", key).apply()
-                },
-                use24HourFormat = use24HourFormat,
-                onUse24HourFormatChanged = { use24h ->
-                    use24HourFormat = use24h
-                    sharedPrefs.edit().putBoolean("use_24h", use24h).apply()
                 }
             )
         }
@@ -329,62 +311,58 @@ fun TemporalLauncher() {
 fun getInstalledApps(context: Context): List<AppInfo> {
     val pm = context.packageManager
     val appList = mutableListOf<AppInfo>()
+    val packageSet = mutableSetOf<String>()
     
     try {
         val intent = Intent(Intent.ACTION_MAIN).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
         }
-        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            PackageManager.MATCH_ALL
-        } else {
-            0
-        }
-        val resolved = pm.queryIntentActivities(intent, flags)
-        Log.d("TemporalLauncher", "queryIntentActivities found ${resolved.size} apps")
-
-        if (resolved.isEmpty()) {
-            Log.w("TemporalLauncher", "No apps found with queryIntentActivities")
-        }
+        val resolved = pm.queryIntentActivities(intent, 0)
 
         resolved.forEach { resolveInfo ->
             val pkg = resolveInfo.activityInfo.packageName
-            val label = resolveInfo.loadLabel(pm).toString()
-            val appInfo = resolveInfo.activityInfo.applicationInfo
-            
-            val category = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                when (appInfo.category) {
-                    android.content.pm.ApplicationInfo.CATEGORY_GAME -> "Games"
-                    android.content.pm.ApplicationInfo.CATEGORY_AUDIO,
-                    android.content.pm.ApplicationInfo.CATEGORY_VIDEO,
-                    android.content.pm.ApplicationInfo.CATEGORY_IMAGE -> "Media"
-                    android.content.pm.ApplicationInfo.CATEGORY_SOCIAL -> "Social"
-                    android.content.pm.ApplicationInfo.CATEGORY_NEWS -> "News"
-                    android.content.pm.ApplicationInfo.CATEGORY_PRODUCTIVITY -> "Work"
-                    else -> AppCategoryHelper.determineCategory(pkg)
+            if (packageSet.add(pkg)) {
+                val label = resolveInfo.loadLabel(pm).toString()
+                val appInfo = resolveInfo.activityInfo.applicationInfo
+                
+                val category = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    when (appInfo.category) {
+                        android.content.pm.ApplicationInfo.CATEGORY_GAME -> "Games"
+                        android.content.pm.ApplicationInfo.CATEGORY_AUDIO,
+                        android.content.pm.ApplicationInfo.CATEGORY_VIDEO,
+                        android.content.pm.ApplicationInfo.CATEGORY_IMAGE -> "Media"
+                        android.content.pm.ApplicationInfo.CATEGORY_SOCIAL -> "Social"
+                        android.content.pm.ApplicationInfo.CATEGORY_NEWS -> "News"
+                        android.content.pm.ApplicationInfo.CATEGORY_PRODUCTIVITY -> "Work"
+                        else -> AppCategoryHelper.determineCategory(pkg)
+                    }
+                } else {
+                    AppCategoryHelper.determineCategory(pkg)
                 }
-            } else {
-                AppCategoryHelper.determineCategory(pkg)
+                appList.add(AppInfo(label, pkg, category))
             }
-            appList.add(AppInfo(label, pkg, category))
         }
     } catch (e: Exception) {
         Log.e("TemporalLauncher", "Error in getInstalledApps", e)
     }
 
-    if (appList.isEmpty()) {
-        Log.d("TemporalLauncher", "Falling back to getInstalledApplications")
-        try {
-            pm.getInstalledApplications(PackageManager.GET_META_DATA).forEach { appInfo ->
+    // Supplementary check for apps that might be missed by the CATEGORY_LAUNCHER query
+    try {
+        pm.getInstalledApplications(0).forEach { appInfo ->
+            if (!packageSet.contains(appInfo.packageName)) {
                 if (pm.getLaunchIntentForPackage(appInfo.packageName) != null) {
-                    appList.add(AppInfo(appInfo.loadLabel(pm).toString(), appInfo.packageName, "Other"))
+                    val pkg = appInfo.packageName
+                    val label = pm.getApplicationLabel(appInfo).toString()
+                    appList.add(AppInfo(label, pkg, AppCategoryHelper.determineCategory(pkg)))
+                    packageSet.add(pkg)
                 }
             }
-        } catch (e: Exception) {
-            Log.e("TemporalLauncher", "Fallback failed", e)
         }
+    } catch (e: Exception) {
+        Log.e("TemporalLauncher", "Supplementary check failed", e)
     }
     
-    return appList.distinctBy { it.packageName }.sortedBy { it.name }
+    return appList.sortedBy { it.name }
 }
 
 fun getStorageInfo(): Int {
@@ -407,7 +385,7 @@ fun getMemoryInfo(context: Context): Int {
 }
 
 fun getBatteryTemperature(context: Context): Float {
-    val intent = context.registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
     val temp = intent?.getIntExtra(android.os.BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0
     return temp / 10f
 }
@@ -453,70 +431,6 @@ fun getMissedCalls(context: Context): List<MissedCallInfo> {
         Log.e("TemporalLauncher", "Error querying missed calls", e)
     }
     return calls
-}
-
-fun getRecentMessages(context: Context): List<MessageInfo> {
-    val messages = mutableListOf<MessageInfo>()
-    if (context.checkSelfPermission(Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
-        return emptyList()
-    }
-    try {
-        val cursor = context.contentResolver.query(
-            Telephony.Sms.CONTENT_URI,
-            arrayOf(Telephony.Sms._ID, Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.READ, Telephony.Sms.TYPE),
-            "read = 0 AND type = ${Telephony.Sms.MESSAGE_TYPE_INBOX}",
-            null,
-            "date DESC"
-        )
-        cursor?.use {
-            val idIndex = it.getColumnIndex(Telephony.Sms._ID)
-            val addressIndex = it.getColumnIndex(Telephony.Sms.ADDRESS)
-            val bodyIndex = it.getColumnIndex(Telephony.Sms.BODY)
-            val readIndex = it.getColumnIndex(Telephony.Sms.READ)
-            val typeIndex = it.getColumnIndex(Telephony.Sms.TYPE)
-            
-            while (it.moveToNext()) {
-                val type = if (typeIndex != -1) it.getInt(typeIndex) else -1
-                if (type != Telephony.Sms.MESSAGE_TYPE_INBOX) continue
-
-                val isRead = if (readIndex != -1) it.getInt(readIndex) == 1 else false
-                if (isRead) continue
-
-                val id = it.getString(idIndex)
-                val address = if (addressIndex != -1) it.getString(addressIndex) else ""
-                val fullBody = if (bodyIndex != -1) (it.getString(bodyIndex) ?: "") else ""
-                
-                var senderName = if (address.isBlank()) "Unknown" else address
-                var photoUri: String? = null
-                
-                val isSpam = SpamDetector.isSpam(address, fullBody)
-
-                // Lookup contact info - if found, it's generally not spam
-                var finalIsSpam = isSpam
-                if (address.isNotBlank() && context.checkSelfPermission(Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED) {
-                    val uri = Uri.withAppendedPath(ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode(address))
-                    context.contentResolver.query(
-                        uri,
-                        arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME, ContactsContract.PhoneLookup.PHOTO_THUMBNAIL_URI),
-                        null, null, null
-                    )?.use { c ->
-                        if (c.moveToFirst()) {
-                            senderName = c.getString(c.getColumnIndex(ContactsContract.PhoneLookup.DISPLAY_NAME)) ?: address
-                            photoUri = c.getString(c.getColumnIndex(ContactsContract.PhoneLookup.PHOTO_THUMBNAIL_URI))
-                            finalIsSpam = false 
-                        }
-                    }
-                }
-                
-                if (!finalIsSpam && !isRead) {
-                    messages.add(MessageInfo(id, fullBody.take(40), address, senderName, photoUri, finalIsSpam))
-                }
-            }
-        }
-    } catch (e: Exception) {
-        Log.e("ChronosLauncher", "Error querying messages", e)
-    }
-    return messages
 }
 
 fun getMostUsedApps(context: Context, allApps: List<AppInfo>): List<AppInfo> {
@@ -642,38 +556,176 @@ fun isNotificationServiceEnabled(context: Context): Boolean {
     return NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
 }
 
-fun getDailyAppUsage(context: Context, allApps: List<AppInfo>): List<AppUsageInfo> {
-    if (!hasUsageStatsPermission(context)) {
-        return emptyList()
-    }
+fun getDailyAppUsage(context: Context, allApps: List<AppInfo>, filterApps: Boolean = true): List<AppUsageInfo> {
+    if (!hasUsageStatsPermission(context)) return emptyList()
+    
     val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+    val now = System.currentTimeMillis()
+    val calendar = Calendar.getInstance().apply {
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }
+    val startOfDay = calendar.timeInMillis
+    
+    // queryUsageStats with manual aggregation is more reliable for "today's" usage
+    val statsList = usageStatsManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startOfDay, now)
+    val aggregatedMap = mutableMapOf<String, Long>()
+
+    if (statsList.isNullOrEmpty()) {
+        usageStatsManager.queryAndAggregateUsageStats(startOfDay, now).forEach { (pkg, stat) ->
+            aggregatedMap[pkg] = stat.totalTimeInForeground
+        }
+    } else {
+        for (stat in statsList) {
+            if (stat.totalTimeInForeground > 0) {
+                aggregatedMap[stat.packageName] = (aggregatedMap[stat.packageName] ?: 0L) + stat.totalTimeInForeground
+            }
+        }
+    }
+
+    if (!filterApps) {
+        return aggregatedMap.map { (pkg, totalTime) ->
+            AppUsageInfo(pkg, pkg, totalTime)
+        }
+    }
+
+    val pm = context.packageManager
+    val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+    val launcherPackages = pm.queryIntentActivities(homeIntent, PackageManager.MATCH_DEFAULT_ONLY)
+        .map { it.activityInfo.packageName }
+        .toMutableSet()
+    launcherPackages.add(context.packageName)
+
+    val appMap = allApps.associateBy { it.packageName }
+
+    return aggregatedMap.entries
+        .filter { it.value >= 60000 && it.key !in launcherPackages }
+        .mapNotNull { (pkg, totalTime) ->
+            val appInfo = appMap[pkg]
+            if (appInfo != null) {
+                AppUsageInfo(pkg, appInfo.name, totalTime)
+            } else {
+                try {
+                    val ai = pm.getApplicationInfo(pkg, 0)
+                    if (pm.getLaunchIntentForPackage(pkg) != null) {
+                        AppUsageInfo(pkg, pm.getApplicationLabel(ai).toString(), totalTime)
+                    } else null
+                } catch (e: Exception) { null }
+            }
+        }
+        .sortedByDescending { it.totalTimeInForeground }
+}
+
+fun getWeeklyUsageData(context: Context): List<Long> {
+    if (!hasUsageStatsPermission(context)) return emptyList()
+    val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+    
     val calendar = Calendar.getInstance()
     calendar.set(Calendar.HOUR_OF_DAY, 0)
     calendar.set(Calendar.MINUTE, 0)
     calendar.set(Calendar.SECOND, 0)
     calendar.set(Calendar.MILLISECOND, 0)
-    val startTime = calendar.timeInMillis
-    val endTime = System.currentTimeMillis()
+    
+    val dayOfWeek = calendar.get(Calendar.DAY_OF_WEEK)
+    val daysSinceSunday = dayOfWeek - 1
+    
+    val weeklyData = mutableListOf<Long>()
+    
+    // Move to the beginning of the week (Sunday)
+    calendar.add(Calendar.DAY_OF_YEAR, -daysSinceSunday)
+    
+    for (i in 0..6) {
+        if (i > daysSinceSunday) {
+            weeklyData.add(0L)
+            continue
+        }
+        
+        val startOfDay = calendar.timeInMillis
+        val endOfDay = if (i == daysSinceSunday) System.currentTimeMillis() else startOfDay + (24 * 60 * 60 * 1000) - 1
+        
+        // Calculate screen-on time for each day using UsageEvents
+        val events = usageStatsManager.queryEvents(startOfDay, endOfDay)
+        val event = android.app.usage.UsageEvents.Event()
+        var dailyTotal = 0L
+        var screenOnTimestamp = -1L
 
-    val stats = usageStatsManager.queryAndAggregateUsageStats(startTime, endTime)
-
-    // Get list of launchers to exclude
-    val packageManager = context.packageManager
-    val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-    val launcherPackages = packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
-        .map { it.activityInfo.packageName }
-        .toSet()
-
-    return stats.values
-        .filter { it.totalTimeInForeground > 0 && it.packageName !in launcherPackages }
-        .mapNotNull { usageStats ->
-            allApps.find { it.packageName == usageStats.packageName }?.let { appInfo ->
-                AppUsageInfo(
-                    packageName = usageStats.packageName,
-                    name = appInfo.name,
-                    totalTimeInForeground = usageStats.totalTimeInForeground
-                )
+        while (events.hasNextEvent()) {
+            events.getNextEvent(event)
+            if (event.eventType == android.app.usage.UsageEvents.Event.SCREEN_INTERACTIVE) {
+                screenOnTimestamp = event.timeStamp
+            } else if (event.eventType == android.app.usage.UsageEvents.Event.SCREEN_NON_INTERACTIVE) {
+                if (screenOnTimestamp != -1L) {
+                    dailyTotal += event.timeStamp - screenOnTimestamp
+                    screenOnTimestamp = -1L
+                }
             }
         }
-        .sortedByDescending { it.totalTimeInForeground }
+
+        if (screenOnTimestamp != -1L && i == daysSinceSunday) {
+            dailyTotal += System.currentTimeMillis() - screenOnTimestamp
+        }
+        
+        // Fallback to max foreground app if no events found
+        if (dailyTotal == 0L) {
+            val stats = usageStatsManager.queryAndAggregateUsageStats(startOfDay, endOfDay)
+            dailyTotal = stats.values.maxOfOrNull { it.totalTimeInForeground } ?: 0L
+        }
+
+        weeklyData.add(dailyTotal)
+        calendar.add(Calendar.DAY_OF_YEAR, 1)
+    }
+    
+    return weeklyData
+}
+
+fun getScreenOnTime(context: Context): Long {
+    if (!hasUsageStatsPermission(context)) return 0L
+
+    val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+    val now = System.currentTimeMillis()
+    val calendar = Calendar.getInstance().apply {
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }
+    val startOfDay = calendar.timeInMillis
+
+    val events = usageStatsManager.queryEvents(startOfDay, now)
+    val event = UsageEvents.Event()
+    var totalTime = 0L
+    var screenOnTimestamp = -1L
+
+    // We track screen interactive events to get true screen-on time
+    while (events.hasNextEvent()) {
+        events.getNextEvent(event)
+        if (event.eventType == UsageEvents.Event.SCREEN_INTERACTIVE) {
+            screenOnTimestamp = event.timeStamp
+        } else if (event.eventType == UsageEvents.Event.SCREEN_NON_INTERACTIVE) {
+            if (screenOnTimestamp != -1L) {
+                totalTime += event.timeStamp - screenOnTimestamp
+                screenOnTimestamp = -1L
+            }
+        }
+    }
+
+    // If the screen is currently on, add the time from last screenOn to now
+    if (screenOnTimestamp != -1L) {
+        totalTime += now - screenOnTimestamp
+    }
+
+    // Fallback: If no screen events were found (some devices/versions don't report them well),
+    // we use the aggregate of the most used app's intervals as a heuristic, 
+    // but typically SCREEN_INTERACTIVE is reliable on modern Android.
+    if (totalTime == 0L) {
+        val stats = usageStatsManager.queryAndAggregateUsageStats(startOfDay, now)
+        // This is still an approximation but avoids double counting overlapping apps
+        // by taking the maximum foreground time of any single app as a baseline, 
+        // though it's not perfect. 
+        totalTime = stats.values.maxOfOrNull { it.totalTimeInForeground } ?: 0L
+    }
+
+    return totalTime
 }

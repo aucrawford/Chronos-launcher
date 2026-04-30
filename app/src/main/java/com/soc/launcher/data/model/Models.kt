@@ -10,8 +10,6 @@ data class WeatherResponse(
 data class Main(val temp: Float, val humidity: Int)
 data class Weather(val description: String, val icon: String)
 
-data class NewsArticle(val title: String, val url: String, val source: String? = null, val urlToImage: String? = null)
-
 data class MissedCallInfo(val id: String, val name: String, val number: String, val count: Int)
 
 data class MessageInfo(val id: String, val text: String, val address: String, val senderName: String, val photoUri: String?, val isSpam: Boolean = false)
