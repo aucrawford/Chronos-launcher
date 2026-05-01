@@ -282,7 +282,8 @@ fun TemporalLauncher() {
                     1 -> PresentScreen(
                         aiAppPackage = aiAppPackage,
                         apps = apps,
-                        weatherApiKey = weatherApiKey
+                        weatherApiKey = weatherApiKey,
+                        onSettingsClick = { showSettings = true }
                     )
                     2 -> FutureScreen(apps)
                 }

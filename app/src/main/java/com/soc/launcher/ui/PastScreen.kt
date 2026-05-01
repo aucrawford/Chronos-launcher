@@ -5,7 +5,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
-import android.provider.CallLog
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -39,45 +38,24 @@ import android.content.Context
 import com.soc.launcher.*
 import android.provider.Settings
 import com.soc.launcher.data.model.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Email
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size as ComposeSize
 import androidx.compose.ui.graphics.nativeCanvas
-import java.util.UUID
 import android.provider.MediaStore
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import android.util.Size
-import androidx.core.content.FileProvider
-import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.text.SimpleDateFormat
 import java.util.*
 import android.widget.Toast
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.foundation.layout.IntrinsicSize
-import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.ThumbUp
 
 /**
  * PastScreen displays historical usage data and recent media.
@@ -161,20 +139,18 @@ fun PastScreen(
         }
     }
 
-    val scrollState = rememberScrollState()
-
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF050A10).copy(alpha = 0.85f))
-            .verticalScroll(scrollState),
+            .background(Color(0xFF050A10).copy(alpha = 0.85f)),
     ) {
-        // App Usage Section (Darker Background)
+        // App Usage Section (Darker Background) - Takes remaining space
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .weight(1f)
                 .background(Color.Black.copy(alpha = 0.15f))
-                .padding(start = 16.dp, end = 16.dp, top = 32.dp, bottom = 16.dp)
+                .padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 0.dp)
         ) {
             AppUsageHeader(
                 hasPermission = hasUsagePermission,
@@ -188,8 +164,7 @@ fun PastScreen(
             if (!hasUsagePermission) {
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(150.dp)
+                        .fillMaxSize()
                         .clickable {
                             val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
                             intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
@@ -208,9 +183,7 @@ fun PastScreen(
                 }
             } else if (appUsage.isEmpty()) {
                 Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(150.dp),
+                    modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
@@ -222,27 +195,26 @@ fun PastScreen(
                 }
             } else {
                 Spacer(Modifier.height(16.dp))
-                // App list with fixed height and internal scrolling to save space
-                Column(
+                LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 200.dp)
-                        .verticalScroll(rememberScrollState())
+                        .weight(1f),
+                    contentPadding = PaddingValues(bottom = 16.dp)
                 ) {
-                    appUsage.forEach { usage ->
+                    items(appUsage) { usage ->
                         AppUsageItem(usage)
                     }
                 }
             }
         }
 
-        // Screen Time Section (0.03 Background)
+        // Screen Time Section (0.03 Background) - Height dependent on content
         if (hasUsagePermission && weeklyUsage.isNotEmpty()) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(Color.White.copy(alpha = 0.03f))
-                    .padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 24.dp)
+                    .padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 12.dp)
             ) {
                 Text(
                     "Screen Time".uppercase(),
@@ -256,12 +228,12 @@ fun PastScreen(
             }
         }
 
-        // Recent Photos Section (Darker Background)
+        // Recent Photos Section (Darker Background) - Height dependent on content
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(Color.Black.copy(alpha = 0.15f))
-                .padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 32.dp)
+                .padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 16.dp)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -348,6 +320,7 @@ fun PastScreen(
                 }
             }
         }
+
     }
 }
 
@@ -588,9 +561,6 @@ fun getRecentCameraImages(context: Context, excludedUris: Set<String>): List<Uri
     
     return images
 }
-
-
-
 
 @Composable
 fun Section(

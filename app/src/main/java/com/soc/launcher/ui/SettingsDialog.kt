@@ -100,18 +100,18 @@ fun SettingsDialog(
                         val p = app.packageName.lowercase()
                         val n = app.name.lowercase()
                         val isAiKeyword = (p.contains(".ai") || p.endsWith(".ai") || p.contains("ai.")) && !p.contains("mail")
-                        val isSpecificAi = p.contains("chat") || 
-                                          p.contains("bard") || 
-                                          p.contains("gemini") || 
-                                          p.contains("openai") || 
-                                          p.contains("claude") || 
+                        val isSpecificAi = p.contains("chat") ||
+                                          p.contains("bard") ||
+                                          p.contains("gemini") ||
+                                          p.contains("openai") ||
+                                          p.contains("claude") ||
                                           p.contains("perplexity") ||
                                           p.contains("lumos") ||
                                           n.contains("lumos") ||
                                           n.contains("chatgpt") ||
                                           n.contains("gemini") ||
                                           n.contains("claude")
-                        
+
                         isSpecificAi || isAiKeyword
                     }
                 ) { onAppSelected("ai", it) }

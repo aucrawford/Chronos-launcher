@@ -12,10 +12,20 @@ import android.net.Uri
 import android.provider.Settings
 import android.util.Log
 import android.text.format.DateFormat
+import android.view.inputmethod.InputMethodManager
+import android.provider.CalendarContract
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.Text
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -27,16 +37,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.compose.foundation.shape.RoundedCornerShape
-import android.provider.CalendarContract
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.DateRange
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material3.Icon
 import com.soc.launcher.*
 import com.soc.launcher.data.model.AppInfo
 import com.soc.launcher.data.model.WeatherResponse
@@ -50,7 +55,8 @@ import java.util.*
 fun PresentScreen(
     aiAppPackage: String,
     apps: List<AppInfo>,
-    weatherApiKey: String
+    weatherApiKey: String,
+    onSettingsClick: () -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -237,226 +243,175 @@ fun PresentScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 16.dp)
-                .padding(top = 40.dp), // Increased top margin for status bar
-            horizontalAlignment = Alignment.Start,
-            verticalArrangement = Arrangement.spacedBy(24.dp) // Consistent spacing between sections
+                .padding(bottom = 140.dp),
+            horizontalAlignment = Alignment.Start
         ) {
-            SearchBar(aiAppPackage)
+            var searchQuery by remember { mutableStateOf("") }
+            PresentSearchBar(
+                aiPkg = aiAppPackage,
+                query = searchQuery,
+                onQueryChange = { searchQuery = it },
+                onSettingsClick = onSettingsClick
+            )
 
-            weatherInfo?.let { weather ->
-                Row(
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Replaced Coil AsyncImage with a simple Text or placeholder since we removed the library
-                    Text(
-                        text = "☁", // Placeholder for weather icon
-                        fontSize = 24.sp,
-                        color = Color.White
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = "${weather.main.temp.toInt()}°C - ${weather.weather[0].description}",
-                        color = Color.White,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        style = TextStyle(
-                            shadow = Shadow(
-                                color = Color.Black.copy(alpha = 1f),
-                                offset = Offset(0f, 0f),
-                                blurRadius = 6f
-                            )
-                        )
-                    )
-                }
-            }
-
-            // Stats Section
             Column(
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                horizontalAlignment = Alignment.Start
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .padding(top = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                StatItem("RAM: $memoryUsage%", Color.White, 16.sp) {
-                    val intent = Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)
-                    try { context.startActivity(intent) } catch (e: Exception) { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
-                }
-                StatItem("STORAGE: $storageUsage%", Color.White, 16.sp) {
-                    val intent = Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS)
-                    try { context.startActivity(intent) } catch (e: Exception) { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
-                }
-                StatItem("TEMP: ${batteryTemp}°C", Color.White, 16.sp) {
-                    val intent = Intent(Intent.ACTION_POWER_USAGE_SUMMARY)
-                    try { context.startActivity(intent) } catch (e: Exception) { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
-                }
-            }
-
-            // Time & Usage Section
-            Column(
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                horizontalAlignment = Alignment.Start
-            ) {
-                if (hasUsagePermission) {
-                    Text(
-                        text = "Screen Time: $totalUsageTime".uppercase(),
-                        color = Color.White,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        style = TextStyle(
-                            shadow = Shadow(
-                                color = Color.Black.copy(alpha = 1f),
-                                offset = Offset(0f, 0f),
-                                blurRadius = 6f
-                            )
-                        )
-                    )
-                }
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Start,
-                    modifier = Modifier.clickable {
-                        val uri = Uri.parse("content://com.android.calendar/time/")
-                        val intent = Intent(Intent.ACTION_VIEW).setData(uri)
-                        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                        try {
-                            context.startActivity(intent)
-                        } catch (e: Exception) {
-                            val calendarPackages = listOf(
-                                "com.google.android.calendar",
-                                "com.android.calendar",
-                                "com.samsung.android.calendar"
-                            )
-                            for (pkg in calendarPackages) {
-                                val launchIntent = context.packageManager.getLaunchIntentForPackage(pkg)
-                                if (launchIntent != null) {
-                                    context.startActivity(launchIntent)
-                                    return@clickable
-                                }
-                            }
-                        }
-                    }
-                ) {
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier.size(24.dp)
+                weatherInfo?.let { weather ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.DateRange,
-                            contentDescription = null,
-                            tint = Color.Black,
-                            modifier = Modifier
-                                .matchParentSize()
-                                .blur(2.dp)
+                        // Replaced Coil AsyncImage with a simple Text or placeholder since we removed the library
+                        Text(
+                            text = "☁", // Placeholder for weather icon
+                            fontSize = 24.sp,
+                            color = Color.White
                         )
-                        Icon(
-                            imageVector = Icons.Default.DateRange,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.matchParentSize()
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = currentDate.uppercase(),
-                        fontSize = 16.sp,
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        style = TextStyle(
-                            shadow = Shadow(
-                                color = Color.Black.copy(alpha = 1f),
-                                offset = Offset(0f, 0f),
-                                blurRadius = 6f
-                            )
-                        )
-                    )
-                }
-
-                if (calendarEvents.isNotEmpty()) {
-                    Column(
-                        modifier = Modifier.padding(start = 32.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        calendarEvents.forEach { event ->
-                            Text(
-                                text = event,
-                                color = Color.White.copy(alpha = 0.9f),
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Medium,
-                                style = TextStyle(
-                                    shadow = Shadow(
-                                        color = Color.Black.copy(alpha = 1f),
-                                        offset = Offset(0f, 0f),
-                                        blurRadius = 6f
-                                    )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "${weather.main.temp.toInt()}°C - ${weather.weather[0].description}",
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            style = TextStyle(
+                                shadow = Shadow(
+                                    color = Color.Black.copy(alpha = 1f),
+                                    offset = Offset(0f, 0f),
+                                    blurRadius = 6f
                                 )
                             )
-                        }
+                        )
                     }
                 }
 
-                if (allAlarms.isNotEmpty()) {
-                    Column(
-                        modifier = Modifier
-                            .padding(top = 8.dp)
-                            .clickable {
-                                val intent = Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS)
-                                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                try {
-                                    context.startActivity(intent)
-                                } catch (e: Exception) {
-                                    val clockPackages = listOf(
-                                        "com.google.android.deskclock",
-                                        "com.android.deskclock",
-                                        "com.sec.android.app.clockpackage",
-                                        "com.huawei.deskclock",
-                                        "com.coloros.alarmclock"
-                                    )
-                                    for (pkg in clockPackages) {
-                                        val launchIntent = context.packageManager.getLaunchIntentForPackage(pkg)
-                                        if (launchIntent != null) {
-                                            context.startActivity(launchIntent)
-                                            return@clickable
-                                        }
+                // Stats Section
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalAlignment = Alignment.Start
+                ) {
+                    StatItem("RAM: $memoryUsage%", Color.White, 16.sp) {
+                        val intent = Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)
+                        try { context.startActivity(intent) } catch (e: Exception) { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
+                    }
+                    StatItem("STORAGE: $storageUsage%", Color.White, 16.sp) {
+                        val intent = Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS)
+                        try { context.startActivity(intent) } catch (e: Exception) { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
+                    }
+                    StatItem("TEMP: ${batteryTemp}°C", Color.White, 16.sp) {
+                        val intent = Intent(Intent.ACTION_POWER_USAGE_SUMMARY)
+                        try { context.startActivity(intent) } catch (e: Exception) { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
+                    }
+                }
+
+                // Time & Usage Section
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalAlignment = Alignment.Start
+                ) {
+                    if (hasUsagePermission) {
+                        Text(
+                            text = "Screen Time: $totalUsageTime".uppercase(),
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            style = TextStyle(
+                                shadow = Shadow(
+                                    color = Color.Black.copy(alpha = 1f),
+                                    offset = Offset(0f, 0f),
+                                    blurRadius = 6f
+                                )
+                            )
+                        )
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Start,
+                        modifier = Modifier.clickable {
+                            val uri = Uri.parse("content://com.android.calendar/time/")
+                            val intent = Intent(Intent.ACTION_VIEW).setData(uri)
+                            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                            try {
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                val calendarPackages = listOf(
+                                    "com.google.android.calendar",
+                                    "com.android.calendar",
+                                    "com.samsung.android.calendar"
+                                )
+                                for (pkg in calendarPackages) {
+                                    val launchIntent = context.packageManager.getLaunchIntentForPackage(pkg)
+                                    if (launchIntent != null) {
+                                        context.startActivity(launchIntent)
+                                        return@clickable
                                     }
                                 }
                             }
+                        }
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier.size(24.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Notifications,
-                                    contentDescription = null,
-                                    tint = Color.Black,
-                                    modifier = Modifier
-                                        .matchParentSize()
-                                        .blur(2.dp)
-                                )
-                                Icon(
-                                    imageVector = Icons.Default.Notifications,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.matchParentSize()
-                                )
-                            }
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                text = "NEXT ALARM",
-                                color = Color.White,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                                style = TextStyle(
-                                    shadow = Shadow(
-                                        color = Color.Black.copy(alpha = 1f),
-                                        offset = Offset(0f, 0f),
-                                        blurRadius = 6f
-                                    )
-                                )
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DateRange,
+                                contentDescription = null,
+                                tint = Color.Black,
+                                modifier = Modifier
+                                    .matchParentSize()
+                                    .blur(2.dp)
+                            )
+                            Icon(
+                                imageVector = Icons.Default.DateRange,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.matchParentSize()
                             )
                         }
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = currentDate.uppercase(),
+                            fontSize = 16.sp,
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            style = TextStyle(
+                                shadow = Shadow(
+                                    color = Color.Black.copy(alpha = 1f),
+                                    offset = Offset(0f, 0f),
+                                    blurRadius = 6f
+                                )
+                            )
+                        )
+                    }
 
+                    if (calendarEvents.isNotEmpty()) {
+                        Column(
+                            modifier = Modifier.padding(start = 32.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            calendarEvents.forEach { event ->
+                                Text(
+                                    text = event,
+                                    color = Color.White.copy(alpha = 0.9f),
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    style = TextStyle(
+                                        shadow = Shadow(
+                                            color = Color.Black.copy(alpha = 1f),
+                                            offset = Offset(0f, 0f),
+                                            blurRadius = 6f
+                                        )
+                                    )
+                                )
+                            }
+                        }
+                    }
+
+                    if (allAlarms.isNotEmpty()) {
                         Column(
                             modifier = Modifier.padding(start = 32.dp, top = 4.dp),
                             verticalArrangement = Arrangement.spacedBy(2.dp)
@@ -479,9 +434,9 @@ fun PresentScreen(
                         }
                     }
                 }
-            }
 
-            MediaControlSection()
+                MediaControlSection()
+            }
         }
 
         val googleAppsPackages = listOf(
@@ -493,53 +448,144 @@ fun PresentScreen(
             "com.google.android.GoogleCamera" // Camera
         )
 
-        val bottomRowApps = googleAppsPackages.map { pkg ->
+        val bottomRowApps = (googleAppsPackages.mapNotNull { pkg ->
             apps.find { it.packageName == pkg } ?: apps.find { it.packageName.contains("camera", ignoreCase = true) && pkg == "com.google.android.GoogleCamera" }
-        }.filterNotNull()
+        } + apps.filter { it.packageName !in googleAppsPackages }).distinctBy { it.packageName }.take(6)
 
-        val topRowApps = mostUsedApps
-            .filter { app -> app.packageName !in googleAppsPackages }
+        val topRowApps = (mostUsedApps.filter { it !in bottomRowApps } +
+                apps.filter { it !in bottomRowApps })
+            .distinctBy { it.packageName }
             .take(6)
 
-        Column(
+        Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
+                .background(Color.Black.copy(alpha = 0.40f))
+                .navigationBarsPadding()
         ) {
-            Box(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color.Black.copy(alpha = 0.40f))
-                    .padding(top = 16.dp, bottom = 24.dp) // Added more bottom padding for nav bar
+                    .padding(vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    // Top Row: Most used
+                    // Top Row
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                        modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         topRowApps.forEach { app ->
-                            AppIcon(app, Modifier.size(60.dp), showLabel = false)
+                            AppIcon(app, Modifier.size(43.dp), showLabel = false)
                         }
                     }
 
-                    // Bottom Row: Fixed Google apps
+                    // Bottom Row
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                        modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         bottomRowApps.forEach { app ->
-                            AppIcon(app, Modifier.size(60.dp), showLabel = false)
+                            AppIcon(app, Modifier.size(43.dp), showLabel = false)
                         }
                     }
                 }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PresentSearchBar(
+    aiPkg: String,
+    query: String = "",
+    onQueryChange: ((String) -> Unit)? = null,
+    placeholder: String = "Search...",
+    onSettingsClick: () -> Unit
+) {
+    val context = LocalContext.current
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color.Black.copy(alpha = 0.40f))
+            .statusBarsPadding()
+            .height(56.dp)
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Default.Search,
+            contentDescription = null,
+            tint = Color.White.copy(alpha = 0.7f),
+            modifier = Modifier.clickable { onSettingsClick() }
+        )
+        TextField(
+            value = query,
+            onValueChange = { onQueryChange?.invoke(it) },
+            placeholder = { Text(placeholder, color = Color.White.copy(alpha = 0.6f)) },
+            modifier = Modifier.weight(1f),
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = Color.Transparent,
+                unfocusedContainerColor = Color.Transparent,
+                focusedIndicatorColor = Color.Transparent,
+                unfocusedIndicatorColor = Color.Transparent,
+                cursorColor = Color.White,
+                focusedTextColor = Color.White
+            ),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = {
+                if (query.isNotEmpty()) {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=$query"))
+                    context.startActivity(intent)
+                    onQueryChange?.invoke("")
+                    // Hide keyboard
+                    val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                    imm?.hideSoftInputFromWindow(null, 0)
+                }
+            })
+        )
+        IconButton(onClick = {
+            if (aiPkg.isNotEmpty()) {
+                val intent = context.packageManager.getLaunchIntentForPackage(aiPkg)
+                if (intent != null) {
+                    try {
+                        context.startActivity(intent)
+                        return@IconButton
+                    } catch (e: Exception) {}
+                }
             }
+
+            // Fallback to Google Assistant specific package if known, otherwise general intent
+            val googleAssistantPkg = "com.google.android.apps.googleassistant"
+            val gaIntent = context.packageManager.getLaunchIntentForPackage(googleAssistantPkg)
+            if (gaIntent != null) {
+                try {
+                    context.startActivity(gaIntent)
+                    return@IconButton
+                } catch (e: Exception) {}
+            }
+
+            // Fallback to system assistant if specific packages fail
+            val assistantIntent = Intent(Intent.ACTION_ASSIST)
+            try {
+                context.startActivity(assistantIntent)
+            } catch (e: Exception) {
+                // Last ditch: Open Google App search
+                try {
+                    val searchIntent = Intent(Intent.ACTION_MAIN)
+                    searchIntent.setPackage("com.google.android.googlequicksearchbox")
+                    context.startActivity(searchIntent)
+                } catch (e2: Exception) {
+                    Log.e("ChronosLauncher", "Failed to launch any assistant", e)
+                }
+            }
+        }) {
+            Icon(Icons.Default.Star, contentDescription = "AI", tint = Color(0xFF4A90E2))
         }
     }
 }

@@ -177,81 +177,6 @@ fun MediaControlSection() {
     }
 }
 
-@Composable
-fun SearchBar(aiPkg: String) {
-    var query by remember { mutableStateOf("") }
-    val context = LocalContext.current
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(56.dp)
-            .background(Color.Black.copy(alpha = 0.25f), RoundedCornerShape(28.dp))
-            .padding(horizontal = 16.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = Icons.Default.Search,
-            contentDescription = null,
-            tint = Color.White.copy(alpha = 0.7f),
-            modifier = Modifier.clickable {
-                val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com"))
-                val resolveInfo = context.packageManager.resolveActivity(browserIntent, PackageManager.MATCH_DEFAULT_ONLY)
-                if (resolveInfo != null) {
-                    context.startActivity(browserIntent)
-                }
-            }
-        )
-        TextField(
-            value = query,
-            onValueChange = { query = it },
-            placeholder = { Text("Search...", color = Color.White.copy(alpha = 0.6f)) },
-            modifier = Modifier.weight(1f),
-            colors = TextFieldDefaults.colors(
-                focusedContainerColor = Color.Transparent,
-                unfocusedContainerColor = Color.Transparent,
-                focusedIndicatorColor = Color.Transparent,
-                unfocusedIndicatorColor = Color.Transparent,
-                cursorColor = Color.White,
-                focusedTextColor = Color.White
-            ),
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = {
-                if (query.isNotEmpty()) {
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=$query"))
-                    context.startActivity(intent)
-                    query = ""
-                    // Hide keyboard
-                    val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-                    imm?.hideSoftInputFromWindow(null, 0)
-                }
-            })
-        )
-        IconButton(onClick = {
-            if (aiPkg.isNotEmpty()) {
-                val intent = context.packageManager.getLaunchIntentForPackage(aiPkg)
-                if (intent != null) {
-                    try {
-                        context.startActivity(intent)
-                        return@IconButton
-                    } catch (e: Exception) {}
-                }
-            }
-
-            // Fallback to system assistant if specific package fails
-            val assistantIntent = Intent(Intent.ACTION_ASSIST)
-            try {
-                context.startActivity(assistantIntent)
-            } catch (e: Exception) {
-                Log.e("ChronosLauncher", "Failed to launch any assistant", e)
-            }
-        }) {
-            Icon(Icons.Default.Star, contentDescription = "AI", tint = Color(0xFF4A90E2))
-        }
-    }
-}
-
 private fun launchSpecificAi(context: Context, pkg: String) {
     if (pkg.isNotEmpty()) {
         val intent = context.packageManager.getLaunchIntentForPackage(pkg)
@@ -402,15 +327,19 @@ fun AppIcon(app: AppInfo, modifier: Modifier = Modifier, showLabel: Boolean = tr
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
+        val boxModifier = if (showLabel) {
+            Modifier.size(48.dp).background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
+        } else {
+            Modifier.fillMaxSize()
+        }
         Box(
-            modifier = (if (showLabel) Modifier.size(48.dp) else Modifier.fillMaxSize())
-                .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(12.dp)),
+            modifier = boxModifier,
             contentAlignment = Alignment.Center
         ) {
             Image(
                 bitmap = icon,
                 contentDescription = app.name,
-                modifier = Modifier.fillMaxSize(0.6f)
+                modifier = if (showLabel) Modifier.fillMaxSize(0.6f) else Modifier.fillMaxSize()
             )
         }
         if (showLabel) {

@@ -398,7 +398,7 @@ fun FavoritesSidebar(favoriteContacts: List<ContactInfo>, hasPermission: Boolean
             .fillMaxHeight()
             .width(72.dp)
             .background(Color.White.copy(alpha = 0.03f))
-            .padding(vertical = 24.dp),
+            .padding(top = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
