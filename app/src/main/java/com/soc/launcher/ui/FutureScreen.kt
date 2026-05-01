@@ -67,15 +67,15 @@ fun FutureScreen(apps: List<AppInfo>) {
     var hiddenExpanded by remember { mutableStateOf(false) }
 
     val pinnedApps = remember(apps, pinnedPackages) {
-        apps.filter { it.packageName in pinnedPackages }
+        apps.filter { it.packageName in pinnedPackages && it.packageName != "com.android.vending" }
     }
 
     val visibleApps = remember(apps, pinnedPackages, hiddenPackages) {
-        apps.filter { it.packageName !in pinnedPackages && it.packageName !in hiddenPackages }
+        apps.filter { it.packageName !in pinnedPackages && it.packageName !in hiddenPackages && it.packageName != "com.android.vending" }
     }
 
     val hiddenApps = remember(apps, hiddenPackages) {
-        apps.filter { it.packageName in hiddenPackages }
+        apps.filter { it.packageName in hiddenPackages && it.packageName != "com.android.vending" }
     }
 
     val filteredVisibleApps = remember(visibleApps, searchQuery) {
@@ -141,11 +141,43 @@ fun FutureScreen(apps: List<AppInfo>) {
             Box(modifier = Modifier.fillMaxHeight().width(1.dp).background(Color.White.copy(alpha = 0.05f)))
 
             Column(modifier = Modifier.weight(1f)) {
-                SearchBarUI(
-                    query = searchQuery,
-                    onQueryChange = { searchQuery = it },
-                    onClear = { searchQuery = "" }
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(end = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(modifier = Modifier.weight(1f)) {
+                        SearchBarUI(
+                            query = searchQuery,
+                            onQueryChange = { searchQuery = it },
+                            onClear = { searchQuery = "" }
+                        )
+                    }
+
+                    val playStoreApp = remember(apps) { apps.find { it.packageName == "com.android.vending" } }
+                    if (playStoreApp != null) {
+                        val icon = remember(context) {
+                            try {
+                                context.packageManager.getApplicationIcon("com.android.vending").toBitmap().asImageBitmap()
+                            } catch (e: Exception) {
+                                null
+                            }
+                        }
+                        if (icon != null) {
+                            Image(
+                                bitmap = icon,
+                                contentDescription = "Play Store",
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clickable {
+                                        val intent = context.packageManager.getLaunchIntentForPackage("com.android.vending")
+                                        if (intent != null) {
+                                            try { context.startActivity(intent) } catch (e: Exception) {}
+                                        }
+                                    }
+                            )
+                        }
+                    }
+                }
 
                 if (apps.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -367,7 +399,7 @@ fun SearchBarUI(query: String, onQueryChange: (String) -> Unit, onClear: () -> U
         modifier = Modifier
             .fillMaxWidth()
             .padding(16.dp),
-        placeholder = { Text("Search apps & contacts", color = Color.White.copy(alpha = 0.3f), fontSize = 14.sp) },
+        placeholder = { Text("Apps & Contacts", color = Color.White.copy(alpha = 0.3f), fontSize = 14.sp) },
         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Color.White.copy(alpha = 0.3f), modifier = Modifier.size(20.dp)) },
         trailingIcon = {
             if (query.isNotEmpty()) {
@@ -599,6 +631,20 @@ fun AppRow(
                 onClick = {
                     onHide(app)
                     showMenu = false
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("App info", color = Color.White) },
+                onClick = {
+                    showMenu = false
+                    try {
+                        val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.fromParts("package", app.packageName, null)
+                        }
+                        context.startActivity(intent)
+                    } catch (e: Exception) {
+                        Log.e("ChronosLauncher", "Failed to open app info", e)
+                    }
                 }
             )
             DropdownMenuItem(

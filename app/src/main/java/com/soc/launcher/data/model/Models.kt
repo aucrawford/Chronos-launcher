@@ -2,14 +2,6 @@ package com.soc.launcher.data.model
 
 data class AppInfo(val name: String, val packageName: String, val category: String)
 
-data class WeatherResponse(
-    val main: Main,
-    val weather: List<Weather>,
-    val name: String
-)
-data class Main(val temp: Float, val humidity: Int)
-data class Weather(val description: String, val icon: String)
-
 data class MissedCallInfo(val id: String, val name: String, val number: String, val count: Int)
 
 data class MessageInfo(val id: String, val text: String, val address: String, val senderName: String, val photoUri: String?, val isSpam: Boolean = false)

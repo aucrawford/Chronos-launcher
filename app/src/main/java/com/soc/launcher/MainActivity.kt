@@ -54,42 +54,7 @@ import androidx.core.graphics.drawable.toBitmap
 import androidx.core.view.WindowCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
-import java.net.URL
 import java.util.*
-
-// Simplified Weather API using built-in HttpURLConnection and org.json
-object WeatherService {
-    suspend fun getCurrentWeather(
-        lat: Double,
-        lon: Double,
-        units: String,
-        apiKey: String
-    ): WeatherResponse = withContext(Dispatchers.IO) {
-        val urlString = "https://api.openweathermap.org/data/2.5/weather?lat=$lat&lon=$lon&units=$units&appid=$apiKey"
-        val response = URL(urlString).readText()
-        val json = JSONObject(response)
-        
-        val mainJson = json.getJSONObject("main")
-        val weatherArray = json.getJSONArray("weather")
-        val weatherObj = weatherArray.getJSONObject(0)
-        
-        WeatherResponse(
-            main = Main(
-                temp = mainJson.getDouble("temp").toFloat(),
-                humidity = mainJson.getInt("humidity")
-            ),
-            weather = listOf(
-                Weather(
-                    description = weatherObj.getString("description"),
-                    icon = weatherObj.getString("icon")
-                )
-            ),
-            name = json.getString("name")
-        )
-    }
-}
-
 
 class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalFoundationApi::class)
@@ -175,6 +140,7 @@ fun TemporalLauncher() {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 hasWallpaperPermission = context.checkSelfPermission(wallpaperPermission) == PackageManager.PERMISSION_GRANTED
+                refreshAppsCounter++
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -234,10 +200,8 @@ fun TemporalLauncher() {
     }
 
     var aiAppPackage by remember { mutableStateOf(sharedPrefs.getString("ai_pkg", "com.google.android.apps.bard") ?: "com.google.android.apps.bard") }
-    var weatherApiKey by remember { mutableStateOf(sharedPrefs.getString("weather_api_key", "") ?: "") }
 
     val pagerState = rememberPagerState(initialPage = 1, pageCount = { 3 })
-    var showSettings by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (defaultWallpaper != null) {
@@ -267,7 +231,10 @@ fun TemporalLauncher() {
                 .navigationBarsPadding()
                 .pointerInput(Unit) {
                     detectTapGestures(
-                        onLongPress = { showSettings = true }
+                        onLongPress = {
+                            val intent = Intent(Intent.ACTION_SET_WALLPAPER)
+                            context.startActivity(Intent.createChooser(intent, "Select Wallpaper"))
+                        }
                     )
                 }
         ) {
@@ -282,29 +249,14 @@ fun TemporalLauncher() {
                     1 -> PresentScreen(
                         aiAppPackage = aiAppPackage,
                         apps = apps,
-                        weatherApiKey = weatherApiKey,
-                        onSettingsClick = { showSettings = true }
+                        onAiAppSelected = { pkg ->
+                            aiAppPackage = pkg
+                            sharedPrefs.edit().putString("ai_pkg", pkg).apply()
+                        }
                     )
                     2 -> FutureScreen(apps)
                 }
             }
-        }
-
-        if (showSettings) {
-            SettingsDialog(
-                onDismiss = { showSettings = false },
-                currentAiPkg = aiAppPackage,
-                onAppSelected = { type, pkg ->
-                    when (type) {
-                        "ai" -> { aiAppPackage = pkg; sharedPrefs.edit().putString("ai_pkg", pkg).apply() }
-                    }
-                },
-                weatherApiKey = weatherApiKey,
-                onApiKeyChanged = { key ->
-                    weatherApiKey = key
-                    sharedPrefs.edit().putString("weather_api_key", key).apply()
-                }
-            )
         }
     }
 }
@@ -315,6 +267,7 @@ fun getInstalledApps(context: Context): List<AppInfo> {
     val packageSet = mutableSetOf<String>()
     
     try {
+        // 1. Standard Launcher query
         val intent = Intent(Intent.ACTION_MAIN).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
         }
@@ -324,43 +277,30 @@ fun getInstalledApps(context: Context): List<AppInfo> {
             val pkg = resolveInfo.activityInfo.packageName
             if (packageSet.add(pkg)) {
                 val label = resolveInfo.loadLabel(pm).toString()
-                val appInfo = resolveInfo.activityInfo.applicationInfo
-                
-                val category = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    when (appInfo.category) {
-                        android.content.pm.ApplicationInfo.CATEGORY_GAME -> "Games"
-                        android.content.pm.ApplicationInfo.CATEGORY_AUDIO,
-                        android.content.pm.ApplicationInfo.CATEGORY_VIDEO,
-                        android.content.pm.ApplicationInfo.CATEGORY_IMAGE -> "Media"
-                        android.content.pm.ApplicationInfo.CATEGORY_SOCIAL -> "Social"
-                        android.content.pm.ApplicationInfo.CATEGORY_NEWS -> "News"
-                        android.content.pm.ApplicationInfo.CATEGORY_PRODUCTIVITY -> "Work"
-                        else -> AppCategoryHelper.determineCategory(pkg)
-                    }
-                } else {
-                    AppCategoryHelper.determineCategory(pkg)
-                }
+                val category = AppCategoryHelper.determineCategory(pkg, label)
                 appList.add(AppInfo(label, pkg, category))
             }
         }
     } catch (e: Exception) {
-        Log.e("TemporalLauncher", "Error in getInstalledApps", e)
+        Log.e("TemporalLauncher", "Error in main app query", e)
     }
 
-    // Supplementary check for apps that might be missed by the CATEGORY_LAUNCHER query
+    // 2. Comprehensive fallback scan
     try {
-        pm.getInstalledApplications(0).forEach { appInfo ->
-            if (!packageSet.contains(appInfo.packageName)) {
-                if (pm.getLaunchIntentForPackage(appInfo.packageName) != null) {
-                    val pkg = appInfo.packageName
-                    val label = pm.getApplicationLabel(appInfo).toString()
-                    appList.add(AppInfo(label, pkg, AppCategoryHelper.determineCategory(pkg)))
+        pm.getInstalledPackages(0).forEach { pkgInfo ->
+            val pkg = pkgInfo.packageName
+            if (!packageSet.contains(pkg)) {
+                val launchIntent = pm.getLaunchIntentForPackage(pkg)
+                if (launchIntent != null) {
+                    val label = pm.getApplicationLabel(pkgInfo.applicationInfo).toString()
+                    val category = AppCategoryHelper.determineCategory(pkg, label)
+                    appList.add(AppInfo(label, pkg, category))
                     packageSet.add(pkg)
                 }
             }
         }
     } catch (e: Exception) {
-        Log.e("TemporalLauncher", "Supplementary check failed", e)
+        Log.e("TemporalLauncher", "Error in fallback app query", e)
     }
     
     return appList.sortedBy { it.name }

@@ -5,24 +5,24 @@ import android.app.AlarmManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.location.Location
-import android.location.LocationListener
-import android.location.LocationManager
 import android.net.Uri
 import android.provider.Settings
 import android.util.Log
 import android.text.format.DateFormat
 import android.view.inputmethod.InputMethodManager
 import android.provider.CalendarContract
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.DateRange
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
@@ -33,7 +33,10 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -42,9 +45,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.core.graphics.drawable.toBitmap
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.draw.clip
 import com.soc.launcher.*
 import com.soc.launcher.data.model.AppInfo
-import com.soc.launcher.data.model.WeatherResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -55,8 +60,7 @@ import java.util.*
 fun PresentScreen(
     aiAppPackage: String,
     apps: List<AppInfo>,
-    weatherApiKey: String,
-    onSettingsClick: () -> Unit
+    onAiAppSelected: (String) -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -77,7 +81,7 @@ fun PresentScreen(
         }
     }
 
-    val mostUsedApps by produceState<List<AppInfo>>(initialValue = emptyList(), apps, hasUsagePermission) {
+    val mostUsedApps by produceState(initialValue = emptyList<AppInfo>(), apps, hasUsagePermission) {
         if (apps.isNotEmpty()) {
             value = withContext(Dispatchers.IO) { getMostUsedApps(context, apps) }
         }
@@ -100,7 +104,7 @@ fun PresentScreen(
 
     var currentDate by remember { mutableStateOf(SimpleDateFormat("EEEE, MMMM d", Locale.getDefault()).format(Date())) }
 
-    val allAlarms by produceState<List<String>>(initialValue = emptyList(), use24HourFormat) {
+    val allAlarms by produceState(initialValue = emptyList<String>(), use24HourFormat) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         while (true) {
             val next = alarmManager.nextAlarmClock
@@ -152,7 +156,7 @@ fun PresentScreen(
         }
     }
 
-    val calendarEvents by produceState<List<String>>(initialValue = emptyList(), use24HourFormat) {
+    val calendarEvents by produceState(initialValue = emptyList<String>(), use24HourFormat) {
         while (true) {
             if (context.checkSelfPermission(Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED) {
                 val events = mutableListOf<String>()
@@ -205,89 +209,47 @@ fun PresentScreen(
         }
     }
 
-    var weatherInfo by remember { mutableStateOf<WeatherResponse?>(null) }
-
-    LaunchedEffect(weatherApiKey) {
-        if (weatherApiKey.isBlank()) {
-            weatherInfo = null
-            return@LaunchedEffect
-        }
-
-        val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-
-        while (true) {
-            try {
-                var lat = 40.7128
-                var lon = -74.0060
-
-                if (context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-                    val location = locationManager.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER) 
-                        ?: locationManager.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER)
-                    
-                    if (location != null) {
-                        lat = location.latitude
-                        lon = location.longitude
-                    }
-                }
-
-                val response = WeatherService.getCurrentWeather(lat, lon, "metric", weatherApiKey)
-                weatherInfo = response
-            } catch (e: Exception) {
-                Log.e("TemporalLauncher", "Weather fetch failed", e)
-            }
-            delay(1800000) // Update every 30 mins
-        }
-    }
-
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(bottom = 140.dp),
+                .padding(bottom = 250.dp),
             horizontalAlignment = Alignment.Start
         ) {
             var searchQuery by remember { mutableStateOf("") }
             PresentSearchBar(
                 aiPkg = aiAppPackage,
+                apps = apps,
                 query = searchQuery,
                 onQueryChange = { searchQuery = it },
-                onSettingsClick = onSettingsClick
+                onAiAppSelected = onAiAppSelected
             )
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .padding(top = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                weatherInfo?.let { weather ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // Replaced Coil AsyncImage with a simple Text or placeholder since we removed the library
-                        Text(
-                            text = "☁", // Placeholder for weather icon
-                            fontSize = 24.sp,
-                            color = Color.White
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = "${weather.main.temp.toInt()}°C - ${weather.weather[0].description}",
-                            color = Color.White,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            style = TextStyle(
-                                shadow = Shadow(
-                                    color = Color.Black.copy(alpha = 1f),
-                                    offset = Offset(0f, 0f),
-                                    blurRadius = 6f
-                                )
-                            )
-                        )
-                    }
+            if (searchQuery.isNotEmpty()) {
+                val filteredApps = remember(searchQuery, apps) {
+                    apps.filter { it.name.contains(searchQuery, ignoreCase = true) }
+                        .sortedBy { it.name }
+                        .take(15)
                 }
 
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    filteredApps.forEach { app ->
+                        AppSearchRow(app)
+                    }
+                }
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .padding(top = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
                 // Stats Section
                 Column(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -434,16 +396,19 @@ fun PresentScreen(
                         }
                     }
                 }
-
-                MediaControlSection()
             }
         }
+    }
+
+        val walletPkg = "com.google.android.apps.walletnfcrel"
+        val gmailPkg = "com.google.android.gm"
+        val walletOrGmail = if (apps.any { it.packageName == walletPkg }) walletPkg else gmailPkg
 
         val googleAppsPackages = listOf(
             "com.google.android.dialer",     // Phone
             "com.google.android.apps.messaging", // Messages
-            "com.google.android.apps.maps",    // Maps
-            "com.android.vending",           // Play Store
+            "com.google.android.apps.photos",    // Photos
+            walletOrGmail,
             "com.google.android.apps.chromecast.app", // Home
             "com.google.android.GoogleCamera" // Camera
         )
@@ -457,11 +422,18 @@ fun PresentScreen(
             .distinctBy { it.packageName }
             .take(6)
 
+        MediaControlSection(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = (12 * 2 + 43 * 2 + 12).dp) // Approximate height of the app dock
+                .navigationBarsPadding()
+        )
+
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .background(Color.Black.copy(alpha = 0.40f))
+                .background(Color(0xFF050A10).copy(alpha = 0.5f))
                 .navigationBarsPadding()
         ) {
             Column(
@@ -471,121 +443,260 @@ fun PresentScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                    // Top Row
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        topRowApps.forEach { app ->
-                            AppIcon(app, Modifier.size(43.dp), showLabel = false)
-                        }
-                    }
-
-                    // Bottom Row
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        bottomRowApps.forEach { app ->
-                            AppIcon(app, Modifier.size(43.dp), showLabel = false)
-                        }
+                // Top Row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    topRowApps.forEach { app ->
+                        AppIcon(app, Modifier.size(43.dp), showLabel = false)
                     }
                 }
+
+                // Bottom Row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    bottomRowApps.forEach { app ->
+                        AppIcon(app, Modifier.size(43.dp), showLabel = false)
+                    }
+                }
+            }
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PresentSearchBar(
-    aiPkg: String,
-    query: String = "",
-    onQueryChange: ((String) -> Unit)? = null,
-    placeholder: String = "Search...",
-    onSettingsClick: () -> Unit
-) {
+fun AppSearchRow(app: AppInfo) {
     val context = LocalContext.current
+    val icon = remember(app.packageName) {
+        try {
+            context.packageManager.getApplicationIcon(app.packageName).toBitmap().asImageBitmap()
+        } catch (e: Exception) {
+            null
+        }
+    }
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color.Black.copy(alpha = 0.40f))
-            .statusBarsPadding()
-            .height(56.dp)
-            .padding(horizontal = 16.dp),
+            .clickable {
+                val intent = context.packageManager.getLaunchIntentForPackage(app.packageName)
+                if (intent != null) {
+                    context.startActivity(intent)
+                }
+            }
+            .padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            imageVector = Icons.Default.Search,
-            contentDescription = null,
-            tint = Color.White.copy(alpha = 0.7f),
-            modifier = Modifier.clickable { onSettingsClick() }
+        if (icon != null) {
+            Image(
+                bitmap = icon,
+                contentDescription = null,
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(8.dp))
+            )
+            Spacer(Modifier.width(12.dp))
+        }
+        Text(
+            text = app.name,
+            color = Color.White,
+            fontSize = 15.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
-        TextField(
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+fun PresentSearchBar(
+    aiPkg: String,
+    apps: List<AppInfo>,
+    query: String = "",
+    onQueryChange: ((String) -> Unit)? = null,
+    placeholder: String = "Search...",
+    onAiAppSelected: (String) -> Unit
+) {
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+
+    val installedAiApps = remember(apps) {
+        apps.filter { it.category == "AI" }
+            .distinctBy { it.packageName }
+            .sortedBy { it.name }
+    }
+
+    val effectiveAiPkg = remember(aiPkg, installedAiApps) {
+        val current = installedAiApps.find { it.packageName == aiPkg }
+        if (current != null) {
+            aiPkg
+        } else {
+            val priority = listOf(
+                "com.google.android.apps.gemini",
+                "com.google.android.apps.bard",
+                "com.google.android.apps.googleassistant"
+            )
+            val fallback = priority.firstOrNull { p -> installedAiApps.any { it.packageName == p } }
+            fallback ?: installedAiApps.firstOrNull()?.packageName ?: ""
+        }
+    }
+
+    val aiIcon = remember(effectiveAiPkg) {
+        try {
+            if (effectiveAiPkg.isNotEmpty()) {
+                context.packageManager.getApplicationIcon(effectiveAiPkg).toBitmap().asImageBitmap()
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    val mapsPkg = "com.google.android.apps.maps"
+    val mapsIcon = remember(apps) {
+        try {
+            context.packageManager.getApplicationIcon(mapsPkg).toBitmap().asImageBitmap()
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFF050A10).copy(alpha = 0.5f))
+            .statusBarsPadding()
+            .padding(end = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        OutlinedTextField(
             value = query,
             onValueChange = { onQueryChange?.invoke(it) },
-            placeholder = { Text(placeholder, color = Color.White.copy(alpha = 0.6f)) },
-            modifier = Modifier.weight(1f),
-            colors = TextFieldDefaults.colors(
-                focusedContainerColor = Color.Transparent,
-                unfocusedContainerColor = Color.Transparent,
-                focusedIndicatorColor = Color.Transparent,
-                unfocusedIndicatorColor = Color.Transparent,
-                cursorColor = Color.White,
-                focusedTextColor = Color.White
+            modifier = Modifier
+                .weight(1f)
+                .padding(16.dp),
+            placeholder = { Text(placeholder, color = Color.White.copy(alpha = 0.5f), fontSize = 14.sp) },
+            leadingIcon = { 
+                Icon(
+                    imageVector = Icons.Default.Search, 
+                    contentDescription = null, 
+                    tint = Color.White.copy(alpha = 0.5f),
+                    modifier = Modifier.size(20.dp)
+                ) 
+            },
+            trailingIcon = {
+                if (query.isNotEmpty()) {
+                    IconButton(onClick = { onQueryChange?.invoke("") }) {
+                        Icon(Icons.Default.Clear, contentDescription = "Clear", tint = Color.White.copy(alpha = 0.3f), modifier = Modifier.size(20.dp))
+                    }
+                }
+            },
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Color(0xFF4A90E2).copy(alpha = 0.4f),
+                unfocusedBorderColor = Color.White.copy(alpha = 0.1f),
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                cursorColor = Color(0xFF4A90E2),
+                focusedContainerColor = Color.White.copy(alpha = 0.03f),
+                unfocusedContainerColor = Color.White.copy(alpha = 0.03f)
             ),
+            shape = RoundedCornerShape(16.dp),
             singleLine = true,
+            textStyle = TextStyle(fontSize = 15.sp),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = {
                 if (query.isNotEmpty()) {
                     val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=$query"))
                     context.startActivity(intent)
                     onQueryChange?.invoke("")
-                    // Hide keyboard
                     val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
                     imm?.hideSoftInputFromWindow(null, 0)
                 }
             })
         )
-        IconButton(onClick = {
-            if (aiPkg.isNotEmpty()) {
-                val intent = context.packageManager.getLaunchIntentForPackage(aiPkg)
-                if (intent != null) {
-                    try {
-                        context.startActivity(intent)
-                        return@IconButton
-                    } catch (e: Exception) {}
+
+        // Maps Icon
+        if (mapsIcon != null) {
+            Image(
+                bitmap = mapsIcon,
+                contentDescription = "Maps",
+                modifier = Modifier
+                    .size(32.dp)
+                    .clickable {
+                        val intent = context.packageManager.getLaunchIntentForPackage(mapsPkg)
+                        if (intent != null) {
+                            try { context.startActivity(intent) } catch (e: Exception) {}
+                        }
+                    }
+            )
+        }
+
+        // AI Icon
+        if (effectiveAiPkg.isNotEmpty()) {
+            if (mapsIcon != null) {
+                Spacer(Modifier.width(16.dp))
+            }
+            var showAiMenu by remember { mutableStateOf(false) }
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .combinedClickable(
+                        onClick = {
+                            val intent = context.packageManager.getLaunchIntentForPackage(effectiveAiPkg)
+                            if (intent != null) {
+                                try { context.startActivity(intent) } catch (e: Exception) {}
+                            }
+                        },
+                        onLongClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            showAiMenu = true
+                        }
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                if (aiIcon != null) {
+                    Image(bitmap = aiIcon, contentDescription = "AI Assistant", modifier = Modifier.size(32.dp))
+                } else {
+                    Icon(Icons.Default.Star, contentDescription = "AI Assistant", tint = Color(0xFF4A90E2), modifier = Modifier.size(32.dp))
+                }
+
+                DropdownMenu(
+                    expanded = showAiMenu,
+                    onDismissRequest = { showAiMenu = false },
+                    modifier = Modifier.background(Color(0xFF2A2A2A))
+                ) {
+                    installedAiApps.filter { it.packageName != effectiveAiPkg }.forEach { app ->
+                        val appIcon = remember(app.packageName) {
+                            try {
+                                context.packageManager.getApplicationIcon(app.packageName).toBitmap().asImageBitmap()
+                            } catch (e: Exception) {
+                                null
+                            }
+                        }
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (appIcon != null) {
+                                        Image(bitmap = appIcon, contentDescription = null, modifier = Modifier.size(24.dp))
+                                        Spacer(Modifier.width(8.dp))
+                                    }
+                                    Text(text = app.name, color = Color.White)
+                                }
+                            },
+                            onClick = {
+                                onAiAppSelected(app.packageName)
+                                showAiMenu = false
+                            }
+                        )
+                    }
                 }
             }
-
-            // Fallback to Google Assistant specific package if known, otherwise general intent
-            val googleAssistantPkg = "com.google.android.apps.googleassistant"
-            val gaIntent = context.packageManager.getLaunchIntentForPackage(googleAssistantPkg)
-            if (gaIntent != null) {
-                try {
-                    context.startActivity(gaIntent)
-                    return@IconButton
-                } catch (e: Exception) {}
-            }
-
-            // Fallback to system assistant if specific packages fail
-            val assistantIntent = Intent(Intent.ACTION_ASSIST)
-            try {
-                context.startActivity(assistantIntent)
-            } catch (e: Exception) {
-                // Last ditch: Open Google App search
-                try {
-                    val searchIntent = Intent(Intent.ACTION_MAIN)
-                    searchIntent.setPackage("com.google.android.googlequicksearchbox")
-                    context.startActivity(searchIntent)
-                } catch (e2: Exception) {
-                    Log.e("ChronosLauncher", "Failed to launch any assistant", e)
-                }
-            }
-        }) {
-            Icon(Icons.Default.Star, contentDescription = "AI", tint = Color(0xFF4A90E2))
         }
     }
 }

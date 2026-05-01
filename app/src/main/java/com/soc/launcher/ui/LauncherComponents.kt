@@ -67,20 +67,20 @@ fun StatItem(text: String, color: Color, fontSize: TextUnit, onClick: () -> Unit
 }
 
 @Composable
-fun MediaControlSection() {
+fun MediaControlSection(modifier: Modifier = Modifier) {
     val mediaInfo by MediaNotificationListener.mediaInfo.collectAsState()
 
     AnimatedVisibility(
         visible = mediaInfo.title.isNotEmpty() && mediaInfo.packageName.isNotEmpty(),
         enter = fadeIn() + expandVertically(),
-        exit = fadeOut() + shrinkVertically()
+        exit = fadeOut() + shrinkVertically(),
+        modifier = modifier
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 12.dp)
-                .background(Color.Black.copy(alpha = 0.25f), RoundedCornerShape(28.dp))
+                .background(Color.Black.copy(alpha = 0.9f))
                 .padding(16.dp)
         ) {
             Text(
