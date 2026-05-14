@@ -153,7 +153,11 @@ fun TemporalLauncher() {
         if (hasWallpaperPermission) {
             withContext(Dispatchers.IO) {
                 try {
-                    val drawable = wallpaperManager.drawable
+                    val drawable = try {
+                        wallpaperManager.peekDrawable()
+                    } catch (e: SecurityException) {
+                        null
+                    }
                     if (drawable != null) {
                         val metrics = context.resources.displayMetrics
                         val screenWidth = metrics.widthPixels
@@ -199,8 +203,8 @@ fun TemporalLauncher() {
         }
     }
 
-    var aiAppPackage by remember { mutableStateOf(sharedPrefs.getString("ai_pkg", "com.google.android.apps.bard") ?: "com.google.android.apps.bard") }
-
+    var aiAppPackage by remember { mutableStateOf(sharedPrefs.getString("ai_pkg", "com.google.android.apps.gemini") ?: "com.google.android.apps.gemini") }
+    var mapAppPackage by remember { mutableStateOf(sharedPrefs.getString("map_pkg", "com.google.android.apps.maps") ?: "com.google.android.apps.maps") }
     val pagerState = rememberPagerState(initialPage = 1, pageCount = { 3 })
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -248,10 +252,15 @@ fun TemporalLauncher() {
                     )
                     1 -> PresentScreen(
                         aiAppPackage = aiAppPackage,
+                        mapAppPackage = mapAppPackage,
                         apps = apps,
                         onAiAppSelected = { pkg ->
                             aiAppPackage = pkg
                             sharedPrefs.edit().putString("ai_pkg", pkg).apply()
+                        },
+                        onMapAppSelected = { pkg ->
+                            mapAppPackage = pkg
+                            sharedPrefs.edit().putString("map_pkg", pkg).apply()
                         }
                     )
                     2 -> FutureScreen(apps)
@@ -303,7 +312,7 @@ fun getInstalledApps(context: Context): List<AppInfo> {
         Log.e("TemporalLauncher", "Error in fallback app query", e)
     }
     
-    return appList.sortedBy { it.name }
+    return appList.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
 }
 
 fun getStorageInfo(): Int {
@@ -453,35 +462,34 @@ fun getFavoriteContacts(context: Context): List<ContactInfo> {
     return contacts
 }
 
-fun searchContacts(context: Context, query: String): List<ContactInfo> {
-    val contacts = mutableMapOf<String, ContactInfo>()
+fun searchContacts(context: Context, query: String): List<ContactInfo> {val contacts = mutableMapOf<String, ContactInfo>()
     if (context.checkSelfPermission(Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
         return emptyList()
     }
-    
-    val uri = ContactsContract.CommonDataKinds.Phone.CONTENT_URI
+
+    // Using Contacts.CONTENT_URI ensures we find ALL contacts, even those without phone numbers
+    val uri = ContactsContract.Contacts.CONTENT_URI
     val projection = arrayOf(
-        ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
-        ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
-        ContactsContract.CommonDataKinds.Phone.PHOTO_THUMBNAIL_URI,
-        ContactsContract.CommonDataKinds.Phone.NUMBER
+        ContactsContract.Contacts._ID,
+        ContactsContract.Contacts.DISPLAY_NAME,
+        ContactsContract.Contacts.PHOTO_THUMBNAIL_URI
     )
-    
-    // Search in display name OR phone number, restricted to favorites (STARRED)
-    val selection = "(${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ? OR ${ContactsContract.CommonDataKinds.Phone.NUMBER} LIKE ?) AND ${ContactsContract.CommonDataKinds.Phone.STARRED} = 1"
-    val selectionArgs = arrayOf("%$query%", "%$query%")
-    val sortOrder = "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} ASC"
+
+    // Search by name across all contacts
+    val selection = "${ContactsContract.Contacts.DISPLAY_NAME} LIKE ?"
+    val selectionArgs = arrayOf("$query%")
+    val sortOrder = "${ContactsContract.Contacts.DISPLAY_NAME} ASC"
 
     try {
         context.contentResolver.query(uri, projection, selection, selectionArgs, sortOrder)?.use { cursor ->
-            val idIndex = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.CONTACT_ID)
-            val nameIndex = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
-            val photoIndex = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.PHOTO_THUMBNAIL_URI)
-            
+            val idIndex = cursor.getColumnIndex(ContactsContract.Contacts._ID)
+            val nameIndex = cursor.getColumnIndex(ContactsContract.Contacts.DISPLAY_NAME)
+            val photoIndex = cursor.getColumnIndex(ContactsContract.Contacts.PHOTO_THUMBNAIL_URI)
+
             while (cursor.moveToNext() && contacts.size < 5) {
                 val id = cursor.getString(idIndex)
                 if (!contacts.containsKey(id)) {
-                    val name = cursor.getString(nameIndex)
+                    val name = cursor.getString(nameIndex) ?: "Unknown"
                     val photoUri = cursor.getString(photoIndex)
                     contacts[id] = ContactInfo(id, name, photoUri)
                 }

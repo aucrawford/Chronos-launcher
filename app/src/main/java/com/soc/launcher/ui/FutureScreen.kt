@@ -7,7 +7,6 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.util.Log
 import android.provider.ContactsContract
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -24,7 +23,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-// Removed material-icons-extended and coil
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Search
@@ -40,6 +38,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -55,6 +54,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.soc.launcher.ui.theme.*
 
 @Composable
 fun FutureScreen(apps: List<AppInfo>) {
@@ -79,27 +79,33 @@ fun FutureScreen(apps: List<AppInfo>) {
     }
 
     val filteredVisibleApps = remember(visibleApps, searchQuery) {
-        if (searchQuery.isBlank()) visibleApps else visibleApps.filter { it.name.contains(searchQuery, ignoreCase = true) }
+        if (searchQuery.isBlank()) visibleApps
+        else visibleApps.filter { it.name.startsWith(searchQuery, ignoreCase = true) }
     }
 
     val filteredPinnedApps = remember(pinnedApps, searchQuery) {
-        if (searchQuery.isBlank()) pinnedApps else pinnedApps.filter { it.name.contains(searchQuery, ignoreCase = true) }
+        if (searchQuery.isBlank()) pinnedApps
+        else pinnedApps.filter { it.name.startsWith(searchQuery, ignoreCase = true) }
     }
 
     val filteredHiddenApps = remember(hiddenApps, searchQuery) {
-        if (searchQuery.isBlank()) hiddenApps else hiddenApps.filter { it.name.contains(searchQuery, ignoreCase = true) }
+        if (searchQuery.isBlank()) hiddenApps
+        else hiddenApps.filter { it.name.startsWith(searchQuery, ignoreCase = true) }
     }
 
-    val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ#".toList()
-    val sectionIndices = remember(filteredVisibleApps, searchQuery) {
+    val alphabet = "#ABCDEFGHIJKLMNOPQRSTUVWXYZ".toList()
+    val sectionIndices = remember(filteredVisibleApps, filteredPinnedApps, searchQuery) {
         if (searchQuery.isNotBlank()) emptyMap()
-        else alphabet.map { char ->
-            val index = filteredVisibleApps.indexOfFirst {
-                if (char == '#') !it.name.first().isLetter()
-                else it.name.startsWith(char, ignoreCase = true)
-            }
-            char to index
-        }.filter { it.second != -1 }.toMap()
+        else {
+            val pinnedCount = if (filteredPinnedApps.isNotEmpty()) filteredPinnedApps.size + 1 else 0
+            alphabet.map { char ->
+                val indexInVisible = filteredVisibleApps.indexOfFirst {
+                    if (char == '#') !it.name.first().isLetter()
+                    else it.name.startsWith(char, ignoreCase = true)
+                }
+                char to (if (indexInVisible != -1) indexInVisible + pinnedCount else -1)
+            }.filter { it.second != -1 }.toMap()
+        }
     }
 
     val listState = rememberLazyListState()
@@ -130,6 +136,9 @@ fun FutureScreen(apps: List<AppInfo>) {
         }
     }
 
+    val density = LocalDensity.current
+    val scrollOffset = with(density) { -10.dp.roundToPx() }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -138,7 +147,10 @@ fun FutureScreen(apps: List<AppInfo>) {
         Row(modifier = Modifier.fillMaxSize()) {
             FavoritesSidebar(favoriteContacts, hasContactsPermission) { permissionLauncher.launch(contactsPermission) }
 
-            Box(modifier = Modifier.fillMaxHeight().width(1.dp).background(Color.White.copy(alpha = 0.05f)))
+            Box(modifier = Modifier.fillMaxHeight()
+                .width(1.dp)
+                .background(FoltrainWhite.copy(alpha = 0.05f))
+            )
 
             Column(modifier = Modifier.weight(1f)) {
                 Row(
@@ -167,7 +179,7 @@ fun FutureScreen(apps: List<AppInfo>) {
                                 bitmap = icon,
                                 contentDescription = "Play Store",
                                 modifier = Modifier
-                                    .size(32.dp)
+                                    .size(44.dp)
                                     .clickable {
                                         val intent = context.packageManager.getLaunchIntentForPackage("com.android.vending")
                                         if (intent != null) {
@@ -181,7 +193,7 @@ fun FutureScreen(apps: List<AppInfo>) {
 
                 if (apps.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = Color.White.copy(alpha = 0.2f))
+                        CircularProgressIndicator(color = FoltrainWhite.copy(alpha = 0.2f))
                     }
                 } else {
                     Box(
@@ -197,9 +209,10 @@ fun FutureScreen(apps: List<AppInfo>) {
                                     item(key = "contacts_header") {
                                         Text(
                                             "CONTACTS",
-                                            color = Color(0xFF4A90E2),
+                                            color = FoltrainMain,
+                                            fontFamily = Raleway,
                                             fontSize = 11.sp,
-                                            fontWeight = FontWeight.Black,
+                                            fontWeight = FontWeight.Medium,
                                             letterSpacing = 1.sp,
                                             modifier = Modifier.padding(top = 24.dp, bottom = 8.dp)
                                         )
@@ -217,13 +230,14 @@ fun FutureScreen(apps: List<AppInfo>) {
                                     item(key = "apps_header") {
                                         if (searchedContacts.isNotEmpty()) {
                                             Spacer(Modifier.height(24.dp))
-                                            Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
+                                            Box(Modifier.fillMaxWidth().height(1.dp).background(FoltrainWhite.copy(alpha = 0.05f)))
                                         }
                                         Text(
                                             "APPS",
-                                            color = Color(0xFF4A90E2),
+                                            color = FoltrainMain,
+                                            fontFamily = Raleway,
                                             fontSize = 11.sp,
-                                            fontWeight = FontWeight.Black,
+                                            fontWeight = FontWeight.Medium,
                                             letterSpacing = 1.sp,
                                             modifier = Modifier.padding(top = 24.dp, bottom = 8.dp)
                                         )
@@ -237,9 +251,10 @@ fun FutureScreen(apps: List<AppInfo>) {
                                     item(key = "pinned_label") {
                                         Text(
                                             "PINNED",
-                                            color = Color(0xFF4A90E2),
+                                            color = FoltrainMain,
+                                            fontFamily = Raleway,
                                             fontSize = 11.sp,
-                                            fontWeight = FontWeight.Black,
+                                            fontWeight = FontWeight.Medium,
                                             letterSpacing = 1.sp,
                                             modifier = Modifier.padding(top = 24.dp, bottom = 8.dp)
                                         )
@@ -280,9 +295,10 @@ fun FutureScreen(apps: List<AppInfo>) {
                                 if (isFirstInCategory) {
                                     Text(
                                         text = if (firstChar.isLetter()) firstChar.toString() else "#",
-                                        color = Color(0xFF4A90E2),
+                                        color = FoltrainMain,
+                                        fontFamily = Raleway,
                                         fontSize = 12.sp,
-                                        fontWeight = FontWeight.Black,
+                                        fontWeight = FontWeight.Medium,
                                         modifier = Modifier.padding(top = 24.dp, bottom = 8.dp)
                                     )
                                 }
@@ -317,14 +333,14 @@ fun FutureScreen(apps: List<AppInfo>) {
                                         ) {
                                             Text(
                                                 "HIDDEN (${filteredHiddenApps.size})",
-                                                color = Color.White.copy(alpha = 0.3f),
+                                                color = FoltrainWhite.copy(alpha = 0.3f),
                                                 fontSize = 11.sp,
                                                 fontWeight = FontWeight.Black,
                                                 letterSpacing = 1.sp
                                             )
                                             Text(
                                                 text = if (hiddenExpanded) "▲" else "▼",
-                                                color = Color.White.copy(alpha = 0.2f),
+                                                color = FoltrainWhite.copy(alpha = 0.2f),
                                                 fontSize = 12.sp
                                             )
                                         }
@@ -380,7 +396,9 @@ fun FutureScreen(apps: List<AppInfo>) {
                         if (searchQuery.isBlank()) {
                             AlphabetScroller(alphabet, sectionIndices) { char ->
                                 sectionIndices[char]?.let { index ->
-                                    scope.launch { listState.scrollToItem(index) }
+                                    scope.launch {
+                                        listState.scrollToItem(index, scrollOffset)
+                                    }
                                 }
                             }
                         }
@@ -399,25 +417,44 @@ fun SearchBarUI(query: String, onQueryChange: (String) -> Unit, onClear: () -> U
         modifier = Modifier
             .fillMaxWidth()
             .padding(16.dp),
-        placeholder = { Text("Apps & Contacts", color = Color.White.copy(alpha = 0.3f), fontSize = 14.sp) },
-        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Color.White.copy(alpha = 0.3f), modifier = Modifier.size(20.dp)) },
+        placeholder = {
+            Text("Apps & Contacts",
+                fontFamily = Raleway,
+                color = FoltrainWhite.copy(alpha = 0.3f),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Normal,
+            )
+        },
+        leadingIcon = {
+            Icon(
+                Icons.Default.Search,
+                contentDescription = null,
+                tint = FoltrainWhite.copy(alpha = 0.3f),
+                modifier = Modifier.size(20.dp)
+            )
+        },
         trailingIcon = {
             if (query.isNotEmpty()) {
                 IconButton(onClick = onClear) {
-                    Icon(Icons.Default.Clear, contentDescription = "Clear", tint = Color.White.copy(alpha = 0.3f), modifier = Modifier.size(20.dp))
+                    Icon(
+                        Icons.Default.Clear,
+                        contentDescription = "Clear",
+                        tint = FoltrainWhite.copy(alpha = 0.3f),
+                        modifier = Modifier.size(20.dp)
+                    )
                 }
             }
         },
         colors = OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = Color(0xFF4A90E2).copy(alpha = 0.4f),
-            unfocusedBorderColor = Color.White.copy(alpha = 0.1f),
-            focusedTextColor = Color.White,
-            unfocusedTextColor = Color.White,
-            cursorColor = Color(0xFF4A90E2),
-            focusedContainerColor = Color.White.copy(alpha = 0.03f),
-            unfocusedContainerColor = Color.White.copy(alpha = 0.03f)
+            focusedBorderColor = FoltrainMain.copy(alpha = 0.4f),
+            unfocusedBorderColor = FoltrainWhite.copy(alpha = 0.1f),
+            focusedTextColor = FoltrainWhite,
+            unfocusedTextColor = FoltrainWhite,
+            cursorColor = FoltrainMain,
+            focusedContainerColor = FoltrainWhite.copy(alpha = 0.03f),
+            unfocusedContainerColor = FoltrainWhite.copy(alpha = 0.03f)
         ),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(8.dp),
         singleLine = true,
         textStyle = TextStyle(fontSize = 15.sp)
     )
@@ -429,30 +466,32 @@ fun FavoritesSidebar(favoriteContacts: List<ContactInfo>, hasPermission: Boolean
         modifier = Modifier
             .fillMaxHeight()
             .width(72.dp)
-            .background(Color.White.copy(alpha = 0.03f))
+            .background(FoltrainWhite.copy(alpha = 0.03f))
             .padding(top = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
             "FAV",
-            color = Color(0xFF4A90E2),
+            color = FoltrainMain,
+            fontFamily = Raleway,
             fontSize = 10.sp,
-            fontWeight = FontWeight.Black,
+            fontWeight = FontWeight.Medium,
             letterSpacing = 1.sp
         )
+
         Spacer(Modifier.height(24.dp))
 
         if (!hasPermission) {
             IconButton(
                 onClick = onPermissionRequest,
-                modifier = Modifier.background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                modifier = Modifier.background(FoltrainWhite.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
             ) {
-                Icon(Icons.Default.Settings, contentDescription = "Contacts Permission", tint = Color.White.copy(alpha = 0.6f))
+                Icon(Icons.Default.Settings, contentDescription = "Contacts Permission", tint = FoltrainWhite.copy(alpha = 0.6f))
             }
         } else if (favoriteContacts.isEmpty()) {
             Text(
                 "★",
-                color = Color.White.copy(alpha = 0.1f),
+                color = FoltrainWhite.copy(alpha = 0.1f),
                 fontSize = 24.sp
             )
         } else {
@@ -467,7 +506,8 @@ fun FavoritesSidebar(favoriteContacts: List<ContactInfo>, hasPermission: Boolean
                         Spacer(Modifier.height(4.dp))
                         Text(
                             text = contact.name.split(" ").firstOrNull() ?: "",
-                            color = Color.White.copy(alpha = 0.7f),
+                            fontFamily = Raleway,
+                            color = FoltrainWhite.copy(alpha = 0.7f),
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Medium,
                             maxLines = 1,
@@ -517,20 +557,21 @@ fun ContactAvatar(contact: ContactInfo, onClick: (() -> Unit)? = null) {
                 modifier = Modifier
                     .fillMaxSize()
                     .clip(RoundedCornerShape(14.dp))
-                    .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(14.dp)),
+                    .border(1.dp, FoltrainWhite.copy(alpha = 0.1f), RoundedCornerShape(14.dp)),
                 contentScale = ContentScale.Crop
             )
         } else {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(14.dp))
-                    .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(14.dp)),
+                    .background(FoltrainWhite.copy(alpha = 0.03f), RoundedCornerShape(14.dp))
+                    .border(1.dp, FoltrainWhite.copy(alpha = 0.1f), RoundedCornerShape(14.dp)),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = contact.name.take(1).uppercase(),
-                    color = Color.White.copy(alpha = 0.6f),
+                    fontFamily = Raleway,
+                    color = FoltrainWhite.copy(alpha = 0.6f),
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -554,7 +595,13 @@ fun ContactRow(contact: ContactInfo) {
     ) {
         ContactAvatar(contact, onClick = { /* Already handled by Row */ })
         Spacer(Modifier.width(16.dp))
-        Text(contact.name, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+        Text(
+            contact.name,
+            fontFamily = Raleway,
+            color = FoltrainWhite,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Light
+        )
     }
 }
 
@@ -608,7 +655,8 @@ fun AppRow(
             }
             Text(
                 text = app.name,
-                color = if (isHidden) Color.White.copy(alpha = 0.3f) else Color.White,
+                fontFamily = Raleway,
+                color = if (isHidden) FoltrainWhite.copy(alpha = 0.3f) else FoltrainWhite,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium
             )
@@ -620,21 +668,36 @@ fun AppRow(
             modifier = Modifier.background(Color(0xFF2A2A2A))
         ) {
             DropdownMenuItem(
-                text = { Text(if (isPinned) "Unpin app" else "Pin app", color = Color.White) },
+                text = {
+                    Text(
+                        if (isPinned) "Unpin app" else "Pin app",
+                        fontFamily = Raleway,
+                        color = FoltrainWhite,
+                    ) },
                 onClick = {
                     onPin(app)
                     showMenu = false
                 }
             )
             DropdownMenuItem(
-                text = { Text(if (isHidden) "Unhide app" else "Hide app", color = Color.White) },
+                text = {
+                    Text(
+                        if (isHidden) "Unhide app" else "Hide app",
+                        fontFamily = Raleway,
+                        color = FoltrainWhite
+                    ) },
                 onClick = {
                     onHide(app)
                     showMenu = false
                 }
             )
             DropdownMenuItem(
-                text = { Text("App info", color = Color.White) },
+                text = {
+                    Text(
+                        "App info",
+                        fontFamily = Raleway,
+                        color = FoltrainWhite
+                    ) },
                 onClick = {
                     showMenu = false
                     try {
@@ -648,7 +711,12 @@ fun AppRow(
                 }
             )
             DropdownMenuItem(
-                text = { Text("Uninstall app", color = Color.Red) },
+                text = {
+                    Text(
+                        "Uninstall app",
+                        fontFamily = Raleway,
+                        color = StatusRed
+                    ) },
                 onClick = {
                     showMenu = false
                     try {
@@ -667,7 +735,11 @@ fun AppRow(
 }
 
 @Composable
-fun BoxScope.AlphabetScroller(alphabet: List<Char>, sectionIndices: Map<Char, Int>, onScrollTo: (Char) -> Unit) {
+fun BoxScope.AlphabetScroller(
+    alphabet: List<Char>,
+    sectionIndices: Map<Char, Int>,
+    onScrollTo: (Char) -> Unit
+) {
     Column(
         modifier = Modifier
             .fillMaxHeight()
@@ -696,9 +768,10 @@ fun BoxScope.AlphabetScroller(alphabet: List<Char>, sectionIndices: Map<Char, In
             val hasApps = sectionIndices.containsKey(char)
             Text(
                 text = char.toString(),
-                color = if (hasApps) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.2f),
+                fontFamily = Raleway,
+                color = if (hasApps) FoltrainWhite.copy(alpha = 0.9f) else FoltrainWhite.copy(alpha = 0.2f),
                 fontSize = 10.sp,
-                fontWeight = FontWeight.Black,
+                fontWeight = FontWeight.Medium,
                 modifier = Modifier
                     .clickable(enabled = hasApps) { onScrollTo(char) }
                     .padding(vertical = 1.dp)

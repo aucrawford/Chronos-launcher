@@ -5,49 +5,43 @@ import android.app.AlarmManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.provider.Settings
-import android.util.Log
+import android.os.Build
 import android.text.format.DateFormat
-import android.view.inputmethod.InputMethodManager
 import android.provider.CalendarContract
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.Image
+import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.DateRange
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
-import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.core.graphics.drawable.toBitmap
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.draw.clip
+import com.soc.launcher.ui.components.MediaController
+import com.soc.launcher.ui.components.PresentSearchBar
 import com.soc.launcher.*
 import com.soc.launcher.data.model.AppInfo
 import kotlinx.coroutines.Dispatchers
@@ -55,14 +49,47 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
+import com.soc.launcher.ui.theme.*
+
+fun isVpnActive(context: Context): Boolean {
+    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    val activeNetwork = cm.activeNetwork
+    val capabilities = cm.getNetworkCapabilities(activeNetwork)
+    return capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) ?: false
+}
+
+fun safeStartSettings(context: android.content.Context, action: String) {
+    try {
+        val intent = android.content.Intent(action)
+        context.startActivity(intent)
+    } catch (e: Exception) {
+        // If the specific settings page doesn't exist, fall back to the main settings
+        context.startActivity(android.content.Intent(android.provider.Settings.ACTION_SETTINGS))
+    }
+}
 
 @Composable
 fun PresentScreen(
     aiAppPackage: String,
+    mapAppPackage: String,
     apps: List<AppInfo>,
-    onAiAppSelected: (String) -> Unit
+    onAiAppSelected: (String) -> Unit,
+    onMapAppSelected: (String) -> Unit
 ) {
+    val aiAppsOnly = remember(apps) {
+        apps.filter { it.category == "AI" }
+    }
+    val mapAppsOnly = remember(apps) {
+        apps.filter { it.packageName.contains("map", ignoreCase = true) || it.name.contains("map", ignoreCase = true) }
+            .distinctBy { it.packageName }
+    }
+
+    var showStats by remember { mutableStateOf(false) }
+    var showMedia by remember { mutableStateOf(false) }
+
     val context = LocalContext.current
+    val sharedPrefs = remember { context.getSharedPreferences("launcher_prefs", Context.MODE_PRIVATE) }
+
     val lifecycleOwner = LocalLifecycleOwner.current
 
     val use24HourFormat = DateFormat.is24HourFormat(context)
@@ -142,13 +169,6 @@ fun PresentScreen(
         }
     }
 
-    val memoryUsage by produceState(initialValue = 0) {
-        while (true) {
-            value = withContext(Dispatchers.IO) { getMemoryInfo(context) }
-            delay(5000)
-        }
-    }
-
     val batteryTemp by produceState(initialValue = 0f) {
         while (true) {
             value = getBatteryTemperature(context)
@@ -209,239 +229,368 @@ fun PresentScreen(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(bottom = 250.dp),
-            horizontalAlignment = Alignment.Start
+    val walletPkg = "com.google.android.apps.walletnfcrel"
+    val gmailPkg = "com.google.android.gm"
+    val walletOrGmail = if (apps.any { it.packageName == walletPkg }) walletPkg else gmailPkg
+
+    val googleAppsPackages = listOf(
+        "com.google.android.dialer",     // Phone
+        "com.google.android.apps.messaging", // Messages
+        "com.google.android.apps.photos",    // Photos
+        walletOrGmail,
+        "com.google.android.apps.chromecast.app", // Home
+        "com.google.android.GoogleCamera" // Camera
+    )
+
+    val bottomRowApps = (googleAppsPackages.mapNotNull { pkg ->
+        apps.find { it.packageName == pkg } ?: apps.find { it.packageName.contains("camera", ignoreCase = true) && pkg == "com.google.android.GoogleCamera" }
+    } + apps.filter { it.packageName !in googleAppsPackages }).distinctBy { it.packageName }.take(6)
+
+    val hiddenPackages = remember { sharedPrefs.getStringSet("hidden_apps", emptySet()) ?: emptySet() }
+
+    // val searchBarPackages = remember { sharedPrefs.getStringSet("pinned_search_apps", emptySet()) ?: emptySet() }
+
+    val playStorePackage = "com.android.vending"
+
+    val bottomRowPackages = bottomRowApps.map { it.packageName }.toSet()
+
+    val topRowApps = (mostUsedApps.filter { app ->
+        val pkg = app.packageName
+            pkg !in bottomRowPackages &&
+            pkg !in hiddenPackages &&
+            pkg !in aiAppPackage &&
+            pkg !in mapAppPackage &&
+            pkg != playStorePackage
+        })
+        .take(6)
+
+
+    Box(modifier = Modifier
+        .fillMaxSize()
+    ) {
+        // Top Content
+        Column(modifier = Modifier
+            .fillMaxWidth()
+            .align(Alignment.TopCenter)
+            .pointerInput(Unit) {
+                detectVerticalDragGestures { change, dragAmount ->
+                    if (dragAmount > 20) {
+                        showStats = true
+                    }
+                }
+            }
         ) {
             var searchQuery by remember { mutableStateOf("") }
+            // Search Bar
             PresentSearchBar(
                 aiPkg = aiAppPackage,
-                apps = apps,
+                aiApps = aiAppsOnly,
+                mapApps = mapAppsOnly,
+                currentMapsPkg = mapAppPackage,
                 query = searchQuery,
                 onQueryChange = { searchQuery = it },
-                onAiAppSelected = onAiAppSelected
+                onAiAppSelected = onAiAppSelected,
+                onMapAppSelected = onMapAppSelected
             )
 
-            if (searchQuery.isNotEmpty()) {
-                val filteredApps = remember(searchQuery, apps) {
-                    apps.filter { it.name.contains(searchQuery, ignoreCase = true) }
-                        .sortedBy { it.name }
-                        .take(15)
-                }
-
-                Column(
-                    modifier = Modifier
+            AnimatedVisibility(
+                visible = showStats,
+                enter = expandVertically(),
+                exit = shrinkVertically()
+            ) {
+                Column(modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    filteredApps.forEach { app ->
-                        AppSearchRow(app)
-                    }
-                }
-            } else {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp)
-                        .padding(top = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                // Stats Section
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                    horizontalAlignment = Alignment.Start
-                ) {
-                    StatItem("RAM: $memoryUsage%", Color.White, 16.sp) {
-                        val intent = Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)
-                        try { context.startActivity(intent) } catch (e: Exception) { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
-                    }
-                    StatItem("STORAGE: $storageUsage%", Color.White, 16.sp) {
-                        val intent = Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS)
-                        try { context.startActivity(intent) } catch (e: Exception) { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
-                    }
-                    StatItem("TEMP: ${batteryTemp}°C", Color.White, 16.sp) {
-                        val intent = Intent(Intent.ACTION_POWER_USAGE_SUMMARY)
-                        try { context.startActivity(intent) } catch (e: Exception) { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
-                    }
-                }
-
-                // Time & Usage Section
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    horizontalAlignment = Alignment.Start
-                ) {
-                    if (hasUsagePermission) {
-                        Text(
-                            text = "Screen Time: $totalUsageTime".uppercase(),
-                            color = Color.White,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            style = TextStyle(
-                                shadow = Shadow(
-                                    color = Color.Black.copy(alpha = 1f),
-                                    offset = Offset(0f, 0f),
-                                    blurRadius = 6f
-                                )
-                            )
-                        )
-                    }
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Start,
-                        modifier = Modifier.clickable {
-                            val uri = Uri.parse("content://com.android.calendar/time/")
-                            val intent = Intent(Intent.ACTION_VIEW).setData(uri)
-                            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                            try {
-                                context.startActivity(intent)
-                            } catch (e: Exception) {
-                                val calendarPackages = listOf(
-                                    "com.google.android.calendar",
-                                    "com.android.calendar",
-                                    "com.samsung.android.calendar"
-                                )
-                                for (pkg in calendarPackages) {
-                                    val launchIntent = context.packageManager.getLaunchIntentForPackage(pkg)
-                                    if (launchIntent != null) {
-                                        context.startActivity(launchIntent)
-                                        return@clickable
-                                    }
+                        .background(Color(0xFF050A10).copy(alpha = 0.7f))
+                        .padding(16.dp)
+                        // Add the swipe-down gesture here
+                        .pointerInput(Unit) {
+                            detectVerticalDragGestures { change, dragAmount ->
+                                change.consume()
+                                if (dragAmount < -20) {
+                                    showStats = false
                                 }
                             }
                         }
+                ) {
+                    // Stats Section
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .padding(top = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalAlignment = Alignment.Start
                     ) {
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.DateRange,
-                                contentDescription = null,
-                                tint = Color.Black,
-                                modifier = Modifier
-                                    .matchParentSize()
-                                    .blur(2.dp)
-                            )
-                            Icon(
-                                imageVector = Icons.Default.DateRange,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.matchParentSize()
-                            )
+                        // VPN Status
+                        val vpnActive = remember(showStats) {
+                            if (showStats) isVpnActive(context) else false
                         }
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = currentDate.uppercase(),
-                            fontSize = 16.sp,
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            style = TextStyle(
-                                shadow = Shadow(
-                                    color = Color.Black.copy(alpha = 1f),
-                                    offset = Offset(0f, 0f),
-                                    blurRadius = 6f
-                                )
-                            )
-                        )
-                    }
-
-                    if (calendarEvents.isNotEmpty()) {
-                        Column(
-                            modifier = Modifier.padding(start = 32.dp),
-                            verticalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            calendarEvents.forEach { event ->
-                                Text(
-                                    text = event,
-                                    color = Color.White.copy(alpha = 0.9f),
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    style = TextStyle(
-                                        shadow = Shadow(
-                                            color = Color.Black.copy(alpha = 1f),
-                                            offset = Offset(0f, 0f),
-                                            blurRadius = 6f
-                                        )
-                                    )
-                                )
+                        val vpnText = if (vpnActive) "ACTIVE" else "INACTIVE"
+                        val vpnColor = if (vpnActive) StatusGreen else StatusGrey
+                        StatItem("VPN: $vpnText", vpnColor, 16.sp) {
+                            val intent = Intent("android.net.vpn.SETTINGS")
+                            try {
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                // Fallback to general Network settings if the specific VPN page fails
+                                safeStartSettings(context, Settings.ACTION_WIFI_SETTINGS)
                             }
                         }
-                    }
 
-                    if (allAlarms.isNotEmpty()) {
-                        Column(
-                            modifier = Modifier.padding(start = 32.dp, top = 4.dp),
-                            verticalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            allAlarms.forEach { alarm ->
-                                Text(
-                                    text = alarm,
-                                    color = Color.White.copy(alpha = 0.9f),
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    style = TextStyle(
-                                        shadow = Shadow(
-                                            color = Color.Black.copy(alpha = 1f),
-                                            offset = Offset(0f, 0f),
-                                            blurRadius = 6f
-                                        )
-                                    )
-                                )
+                        // Android Version
+                        StatItem("OS: ANDROID ${Build.VERSION.RELEASE}", FoltrainWhite, 16.sp) {
+                            val intent = Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)
+                            try {
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                context.startActivity(Intent(Settings.ACTION_SETTINGS))
                             }
+                        }
+
+                        // Storage space
+                        StatItem("STORAGE: $storageUsage%", FoltrainWhite, 16.sp) {
+                            val intent = Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS)
+                            try {
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                context.startActivity(Intent(Settings.ACTION_SETTINGS))
+                            }
+                        }
+
+                        // Temperature
+                        val rawTemp = batteryTemp.toInt() // Assuming you're pulling this from a BroadcastReceiver
+                        val celsius = rawTemp / 10
+                        val isHot = celsius >= 40 // Set your threshold (40°C is a good warning point)
+                        val tempColor = if (isHot) StatusRed else FoltrainWhite
+                        StatItem("TEMP: ${batteryTemp}°C", tempColor, 16.sp) {
+                            val intent = Intent(Intent.ACTION_POWER_USAGE_SUMMARY)
+                            try {
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                context.startActivity(Intent(Settings.ACTION_SETTINGS))
+                            }
+                        }
+                        if (hasUsagePermission) {
+                            Text(
+                                text = "Screen Time: $totalUsageTime".uppercase(),
+                                color = FoltrainWhite,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
                         }
                     }
                 }
             }
         }
-    }
 
-        val walletPkg = "com.google.android.apps.walletnfcrel"
-        val gmailPkg = "com.google.android.gm"
-        val walletOrGmail = if (apps.any { it.packageName == walletPkg }) walletPkg else gmailPkg
 
-        val googleAppsPackages = listOf(
-            "com.google.android.dialer",     // Phone
-            "com.google.android.apps.messaging", // Messages
-            "com.google.android.apps.photos",    // Photos
-            walletOrGmail,
-            "com.google.android.apps.chromecast.app", // Home
-            "com.google.android.GoogleCamera" // Camera
-        )
+        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(FoltrainWhite.copy(alpha = 0.05f)))
 
-        val bottomRowApps = (googleAppsPackages.mapNotNull { pkg ->
-            apps.find { it.packageName == pkg } ?: apps.find { it.packageName.contains("camera", ignoreCase = true) && pkg == "com.google.android.GoogleCamera" }
-        } + apps.filter { it.packageName !in googleAppsPackages }).distinctBy { it.packageName }.take(6)
-
-        val topRowApps = (mostUsedApps.filter { it !in bottomRowApps } +
-                apps.filter { it !in bottomRowApps })
-            .distinctBy { it.packageName }
-            .take(6)
-
-        MediaControlSection(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = (12 * 2 + 43 * 2 + 12).dp) // Approximate height of the app dock
-                .navigationBarsPadding()
-        )
-
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .background(Color(0xFF050A10).copy(alpha = 0.5f))
-                .navigationBarsPadding()
+        // Bottom content
+        Column(modifier = Modifier
+            .fillMaxWidth()
+            .align(Alignment.BottomCenter)
+            .pointerInput(Unit) {
+                detectVerticalDragGestures { _, dragAmount ->
+                    // Negative dragAmount means your finger is moving UP
+                    if (dragAmount < -20) {
+                        showMedia = true
+                    }
+                }
+            }
         ) {
+            // Time & Usage Section
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                    .padding(horizontal = 16.dp)
+                    .padding(top = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalAlignment = Alignment.Start
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Start,
+                    modifier = Modifier.clickable {
+                        val uri = Uri.parse("content://com.android.calendar/time/")
+                        val intent = Intent(Intent.ACTION_VIEW).setData(uri)
+                        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        try {
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            val calendarPackages = listOf(
+                                "com.google.android.calendar",
+                                "com.android.calendar",
+                                "com.samsung.android.calendar"
+                            )
+                            for (pkg in calendarPackages) {
+                                val launchIntent =
+                                    context.packageManager.getLaunchIntentForPackage(pkg)
+                                if (launchIntent != null) {
+                                    context.startActivity(launchIntent)
+                                    return@clickable
+                                }
+                            }
+                        }
+                    }
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DateRange,
+                            contentDescription = null,
+                            tint = FoltrainWhite,
+                            modifier = Modifier.matchParentSize()
+                        )
+                    }
+
+                    Spacer(Modifier.width(8.dp))
+
+                    Text(
+                        text = currentDate.uppercase(),
+                        fontSize = 16.sp,
+                        fontFamily = Raleway,
+                        color = FoltrainWhite,
+                        fontWeight = FontWeight.Medium,
+                        style = TextStyle(
+                            shadow = Shadow(
+                                color = Color.Black.copy(alpha = 1f),
+                                offset = Offset(0f, 0f),
+                                blurRadius = 2f
+                            )
+                        )
+                    )
+                }
+
+                if (calendarEvents.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier.padding(start = 32.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        calendarEvents.forEach { event ->
+                            Text(
+                                text = event,
+                                fontFamily = Raleway,
+                                color = FoltrainWhite,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Normal,
+                                style = TextStyle(
+                                    shadow = Shadow(
+                                        color = Color.Black.copy(alpha = 1f),
+                                        offset = Offset(0f, 0f),
+                                        blurRadius = 2f
+                                    )
+                                )
+                            )
+                        }
+                    }
+                }
+
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Start,
+                    modifier = Modifier.clickable {
+                        val uri = Uri.parse("content://com.android.clockwork.alarmclock/time/")
+                        val intent = Intent(Intent.ACTION_VIEW).setData(uri)
+                        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        try {
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            val calendarPackages = listOf(
+                                "com.google.android.clockwork.alarmclock",
+                                "com.android.alarmclock",
+                                "com.samsung.android.alarmclock"
+                            )
+                            for (pkg in calendarPackages) {
+                                val launchIntent =
+                                    context.packageManager.getLaunchIntentForPackage(pkg)
+                                if (launchIntent != null) {
+                                    context.startActivity(launchIntent)
+                                    return@clickable
+                                }
+                            }
+                        }
+                    }
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Alarm,
+                            contentDescription = null,
+                            tint = FoltrainWhite,
+                            modifier = Modifier.matchParentSize()
+                        )
+                    }
+
+                    Spacer(Modifier.width(8.dp))
+
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        if (allAlarms.isNotEmpty()) {
+                            allAlarms.forEach { alarm ->
+                                Text(
+                                    text = "NEXT ALARM: $alarm",
+                                    fontFamily = Raleway,
+                                    color = FoltrainWhite,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Normal,
+                                    style = TextStyle(
+                                        shadow = Shadow(
+                                            color = Color.Black.copy(alpha = 1f),
+                                            offset = Offset(0f, 0f),
+                                            blurRadius = 2f
+                                        )
+                                    )
+                                )
+                            }
+                        } else {
+                            Text(
+                                text = "NO MORE ALARMS TODAY",
+                                color = FoltrainWhite,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                style = TextStyle(
+                                    shadow = Shadow(
+                                        color = Color.Black.copy(alpha = 1f),
+                                        offset = Offset(0f, 0f),
+                                        blurRadius = 2f
+                                    )
+                                )
+                            )
+
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            AnimatedVisibility(
+                visible = showMedia,
+                enter = expandVertically(),
+                exit = shrinkVertically(),
+                modifier = Modifier.pointerInput(Unit) {
+                    // LISTENER TO CLOSE (Swipe DOWN)
+                    detectVerticalDragGestures { _, dragAmount ->
+                        if (dragAmount > 20) showMedia = false
+                    }
+                }
+            ) {
+                MediaController()
+            }
+
+            Column(modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF050A10).copy(alpha = 0.5f))
+                .padding(vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+
             ) {
                 // Top Row
                 Row(
@@ -470,233 +619,19 @@ fun PresentScreen(
 }
 
 @Composable
-fun AppSearchRow(app: AppInfo) {
-    val context = LocalContext.current
-    val icon = remember(app.packageName) {
-        try {
-            context.packageManager.getApplicationIcon(app.packageName).toBitmap().asImageBitmap()
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable {
-                val intent = context.packageManager.getLaunchIntentForPackage(app.packageName)
-                if (intent != null) {
-                    context.startActivity(intent)
-                }
-            }
-            .padding(vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (icon != null) {
-            Image(
-                bitmap = icon,
-                contentDescription = null,
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(8.dp))
+fun StatItem(text: String, color: Color, fontSize: TextUnit, onClick: () -> Unit) {
+    Text(
+        text = text,
+        color = color,
+        fontSize = fontSize,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.clickable(onClick = onClick),
+        style = TextStyle(
+            shadow = Shadow(
+                color = Color.Black.copy(alpha = 1f),
+                offset = Offset(0f, 0f),
+                blurRadius = 6f
             )
-            Spacer(Modifier.width(12.dp))
-        }
-        Text(
-            text = app.name,
-            color = Color.White,
-            fontSize = 15.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
         )
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
-@Composable
-fun PresentSearchBar(
-    aiPkg: String,
-    apps: List<AppInfo>,
-    query: String = "",
-    onQueryChange: ((String) -> Unit)? = null,
-    placeholder: String = "Search...",
-    onAiAppSelected: (String) -> Unit
-) {
-    val context = LocalContext.current
-    val haptic = LocalHapticFeedback.current
-
-    val installedAiApps = remember(apps) {
-        apps.filter { it.category == "AI" }
-            .distinctBy { it.packageName }
-            .sortedBy { it.name }
-    }
-
-    val effectiveAiPkg = remember(aiPkg, installedAiApps) {
-        val current = installedAiApps.find { it.packageName == aiPkg }
-        if (current != null) {
-            aiPkg
-        } else {
-            val priority = listOf(
-                "com.google.android.apps.gemini",
-                "com.google.android.apps.bard",
-                "com.google.android.apps.googleassistant"
-            )
-            val fallback = priority.firstOrNull { p -> installedAiApps.any { it.packageName == p } }
-            fallback ?: installedAiApps.firstOrNull()?.packageName ?: ""
-        }
-    }
-
-    val aiIcon = remember(effectiveAiPkg) {
-        try {
-            if (effectiveAiPkg.isNotEmpty()) {
-                context.packageManager.getApplicationIcon(effectiveAiPkg).toBitmap().asImageBitmap()
-            } else {
-                null
-            }
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    val mapsPkg = "com.google.android.apps.maps"
-    val mapsIcon = remember(apps) {
-        try {
-            context.packageManager.getApplicationIcon(mapsPkg).toBitmap().asImageBitmap()
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Color(0xFF050A10).copy(alpha = 0.5f))
-            .statusBarsPadding()
-            .padding(end = 16.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        OutlinedTextField(
-            value = query,
-            onValueChange = { onQueryChange?.invoke(it) },
-            modifier = Modifier
-                .weight(1f)
-                .padding(16.dp),
-            placeholder = { Text(placeholder, color = Color.White.copy(alpha = 0.5f), fontSize = 14.sp) },
-            leadingIcon = { 
-                Icon(
-                    imageVector = Icons.Default.Search, 
-                    contentDescription = null, 
-                    tint = Color.White.copy(alpha = 0.5f),
-                    modifier = Modifier.size(20.dp)
-                ) 
-            },
-            trailingIcon = {
-                if (query.isNotEmpty()) {
-                    IconButton(onClick = { onQueryChange?.invoke("") }) {
-                        Icon(Icons.Default.Clear, contentDescription = "Clear", tint = Color.White.copy(alpha = 0.3f), modifier = Modifier.size(20.dp))
-                    }
-                }
-            },
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = Color(0xFF4A90E2).copy(alpha = 0.4f),
-                unfocusedBorderColor = Color.White.copy(alpha = 0.1f),
-                focusedTextColor = Color.White,
-                unfocusedTextColor = Color.White,
-                cursorColor = Color(0xFF4A90E2),
-                focusedContainerColor = Color.White.copy(alpha = 0.03f),
-                unfocusedContainerColor = Color.White.copy(alpha = 0.03f)
-            ),
-            shape = RoundedCornerShape(16.dp),
-            singleLine = true,
-            textStyle = TextStyle(fontSize = 15.sp),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = {
-                if (query.isNotEmpty()) {
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=$query"))
-                    context.startActivity(intent)
-                    onQueryChange?.invoke("")
-                    val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-                    imm?.hideSoftInputFromWindow(null, 0)
-                }
-            })
-        )
-
-        // Maps Icon
-        if (mapsIcon != null) {
-            Image(
-                bitmap = mapsIcon,
-                contentDescription = "Maps",
-                modifier = Modifier
-                    .size(32.dp)
-                    .clickable {
-                        val intent = context.packageManager.getLaunchIntentForPackage(mapsPkg)
-                        if (intent != null) {
-                            try { context.startActivity(intent) } catch (e: Exception) {}
-                        }
-                    }
-            )
-        }
-
-        // AI Icon
-        if (effectiveAiPkg.isNotEmpty()) {
-            if (mapsIcon != null) {
-                Spacer(Modifier.width(16.dp))
-            }
-            var showAiMenu by remember { mutableStateOf(false) }
-            Box(
-                modifier = Modifier
-                    .size(32.dp)
-                    .combinedClickable(
-                        onClick = {
-                            val intent = context.packageManager.getLaunchIntentForPackage(effectiveAiPkg)
-                            if (intent != null) {
-                                try { context.startActivity(intent) } catch (e: Exception) {}
-                            }
-                        },
-                        onLongClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            showAiMenu = true
-                        }
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                if (aiIcon != null) {
-                    Image(bitmap = aiIcon, contentDescription = "AI Assistant", modifier = Modifier.size(32.dp))
-                } else {
-                    Icon(Icons.Default.Star, contentDescription = "AI Assistant", tint = Color(0xFF4A90E2), modifier = Modifier.size(32.dp))
-                }
-
-                DropdownMenu(
-                    expanded = showAiMenu,
-                    onDismissRequest = { showAiMenu = false },
-                    modifier = Modifier.background(Color(0xFF2A2A2A))
-                ) {
-                    installedAiApps.filter { it.packageName != effectiveAiPkg }.forEach { app ->
-                        val appIcon = remember(app.packageName) {
-                            try {
-                                context.packageManager.getApplicationIcon(app.packageName).toBitmap().asImageBitmap()
-                            } catch (e: Exception) {
-                                null
-                            }
-                        }
-                        DropdownMenuItem(
-                            text = {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    if (appIcon != null) {
-                                        Image(bitmap = appIcon, contentDescription = null, modifier = Modifier.size(24.dp))
-                                        Spacer(Modifier.width(8.dp))
-                                    }
-                                    Text(text = app.name, color = Color.White)
-                                }
-                            },
-                            onClick = {
-                                onAiAppSelected(app.packageName)
-                                showAiMenu = false
-                            }
-                        )
-                    }
-                }
-            }
-        }
-    }
+    )
 }
